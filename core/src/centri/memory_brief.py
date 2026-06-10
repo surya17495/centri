@@ -127,10 +127,16 @@ class MemoryBriefAssembler:
             return chosen[:max_per_section]
 
         def rank_facts(items: List[Fact]) -> List[Fact]:
-            scored = [(_relevance(cue_tokens, f.topic, f.statement, *f.tags), f) for f in items]
+            # Procedural conventions ("how I always do it") apply broadly, so a
+            # convention-tagged fact is always injected regardless of cue match —
+            # this is what closes centri-bench task 5. Other facts are cue-ranked.
+            conventions = [f for f in items if "convention" in f.tags]
+            others = [f for f in items if "convention" not in f.tags]
+            scored = [(_relevance(cue_tokens, f.topic, f.statement, *f.tags), f) for f in others]
             hits = [f for s, f in sorted(scored, key=lambda x: -x[0]) if s >= min_score]
-            chosen = hits if hits else items
-            return chosen[:max_per_section]
+            ranked_others = hits if hits else others
+            # Conventions lead, then cue-relevant facts, capped overall.
+            return (conventions + ranked_others)[:max_per_section]
 
         def rank_loops(items: List[OpenLoop]) -> List[OpenLoop]:
             scored = [(_relevance(cue_tokens, loop.intent, loop.cue, *loop.tags), loop) for loop in items]
