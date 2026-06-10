@@ -40,7 +40,7 @@ class _FakeHand:
             ],
         )
 
-    async def execute(self, request: HandoffRequest) -> HandoffResult:
+    async def execute(self, request: HandoffRequest, event_sink=None, approval_gate=None) -> HandoffResult:
         return await self.start_task(request)
 
 
@@ -50,8 +50,8 @@ class FakeHands:
     def __init__(self):
         self._hand = _FakeHand()
 
-    async def execute(self, request: HandoffRequest) -> HandoffResult:
-        return await self._hand.execute(request)
+    async def execute(self, request: HandoffRequest, event_sink=None, approval_gate=None) -> HandoffResult:
+        return await self._hand.execute(request, event_sink=event_sink, approval_gate=approval_gate)
 
 
 class FakeEventBus:

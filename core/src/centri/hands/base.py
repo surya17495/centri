@@ -13,9 +13,22 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from centri.schemas import HandCapability, HandoffRequest, HandoffResult
+
+# A sink a hand calls to stream an event (task.progress / hand.progress /
+# artifact.created / approval.requested) live, before the handoff returns. The
+# jobs layer supplies a sink that records the event to the ledger and fans it out
+# on the bus. Hands that run to completion (subprocess) may ignore it and instead
+# return events in ``HandoffResult.events_to_record``.
+EventSink = Callable[[Dict[str, Any]], Awaitable[None]]
+
+# A gate a hand awaits when the agent requests permission for a destructive
+# action. Given the approval payload (tool, action, preview), it returns the
+# resolved outcome string ("allow" / "deny"). The jobs layer supplies one that
+# creates an ``approval.requested`` record and blocks on its resolution.
+ApprovalGate = Callable[[Dict[str, Any]], Awaitable[str]]
 
 
 @dataclass
@@ -49,8 +62,21 @@ class Hand(ABC):
         """Probe whether the hand is configured and reachable."""
 
     @abstractmethod
-    async def execute(self, request: HandoffRequest) -> HandoffResult:
-        """Run a handoff request to completion, streaming progress as events."""
+    async def execute(
+        self,
+        request: HandoffRequest,
+        event_sink: Optional[EventSink] = None,
+        approval_gate: Optional[ApprovalGate] = None,
+    ) -> HandoffResult:
+        """Run a handoff request to completion.
+
+        ``event_sink``, when provided, is awaited for each progress/artifact
+        event as it happens, so the UI sees live updates rather than a single
+        completion. ``approval_gate``, when provided, is awaited when the agent
+        requests permission for a destructive action; it returns the resolved
+        outcome. Hands may ignore either and still return final events in
+        ``HandoffResult.events_to_record``.
+        """
 
     @abstractmethod
     async def cancel(self, task_id: str) -> bool:

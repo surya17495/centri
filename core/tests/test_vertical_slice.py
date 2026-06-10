@@ -57,8 +57,10 @@ class _FakeHands:
     def __init__(self):
         self.requests = []
 
-    async def execute(self, request):
+    async def execute(self, request, event_sink=None, approval_gate=None):
         self.requests.append(request)
+        if event_sink is not None:
+            await event_sink({"type": "hand.progress", "summary": "fake stream start", "percent": 1})
         await asyncio.sleep(0.01)
         return HandoffResult(
             status="completed",

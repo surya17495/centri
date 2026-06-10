@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -9,16 +10,29 @@ from centri.schemas import HandoffRequest
 
 logger = logging.getLogger(__name__)
 
+# How long a hand waits for a destructive-action approval before it is denied.
+APPROVAL_TIMEOUT_SECONDS = 300.0
+_APPROVAL_POLL_SECONDS = 0.25
+
 
 class Jobs:
     """Track long-running handoffs: start, cancel, resume, poll, recover."""
 
-    def __init__(self, db: Any, hands: Any, permissions: Any, event_bus: Any = None, memory: Any = None):
+    def __init__(
+        self,
+        db: Any,
+        hands: Any,
+        permissions: Any,
+        event_bus: Any = None,
+        memory: Any = None,
+        approval_timeout: float = APPROVAL_TIMEOUT_SECONDS,
+    ):
         self._db = db
         self._hands = hands
         self._permissions = permissions
         self._event_bus = event_bus
         self._memory = memory
+        self._approval_timeout = approval_timeout
         self._running: Dict[str, asyncio.Task] = {}
 
     async def start(self, request: HandoffRequest, task_id: str) -> str:
@@ -64,6 +78,67 @@ class Jobs:
         if self._event_bus:
             await self._event_bus.publish(event)
 
+    async def _await_approval(
+        self, task_id: Optional[str], thread_id: Optional[str], payload: Dict[str, Any]
+    ) -> str:
+        """Create an approval.requested gate and block until resolved or timed out.
+
+        Returns the ACP-style outcome string: ``"allow"`` or ``"deny"``. A
+        timeout denies with a reason rather than hanging the hand forever.
+        """
+        approval_id = f"apv-{uuid.uuid4().hex[:8]}"
+        label = str(payload.get("title") or payload.get("tool") or "Permission request")[:80]
+        detail = str(payload.get("action") or payload.get("preview") or "")
+        risk = str(payload.get("risk") or "high")
+        await self._db.create_approval(
+            approval_id=approval_id,
+            task_id=task_id,
+            thread_id=thread_id,
+            label=label,
+            detail=detail,
+            risk=risk,
+            requested_action=str(payload.get("tool") or "hand.permission"),
+            requested_at=_now(),
+            artifact=payload,
+        )
+        await self._record_event(
+            "approval.requested",
+            source="hand",
+            thread_id=thread_id,
+            task_id=task_id,
+            payload={"approval_id": approval_id, "label": label, "risk": risk, "detail": detail, **payload},
+        )
+
+        deadline = asyncio.get_event_loop().time() + self._approval_timeout
+        while asyncio.get_event_loop().time() < deadline:
+            approval = await self._db.get_approval(approval_id)
+            status = (approval or {}).get("status", "pending")
+            if status == "approved":
+                outcome = "allow"
+                break
+            if status in ("rejected", "denied"):
+                outcome = "deny"
+                break
+            await asyncio.sleep(_APPROVAL_POLL_SECONDS)
+        else:
+            outcome = "deny"
+            await self._db.resolve_approval(
+                approval_id=approval_id,
+                status="rejected",
+                responded_by="timeout",
+                responded_at=_now(),
+            )
+            logger.warning("Approval %s timed out after %ss; denying", approval_id, self._approval_timeout)
+
+        await self._record_event(
+            "approval.resolved",
+            source="hand",
+            thread_id=thread_id,
+            task_id=task_id,
+            payload={"approval_id": approval_id, "action": "approved" if outcome == "allow" else "rejected"},
+        )
+        return outcome
+
     async def _run_job(self, task_id: str, request: HandoffRequest) -> None:
         task_row = await self._db.get_task(task_id)
         thread_id = task_row.get("thread_id") if task_row else None
@@ -71,9 +146,25 @@ class Jobs:
         repo_id = None
         if request.context and getattr(request.context, "repo_state", None):
             repo_id = getattr(request.context.repo_state, "id", None)
+
+        async def _sink(event: Dict[str, Any]) -> None:
+            """Record + fan out a streamed event live, before the handoff returns."""
+            await self._record_event(
+                event.get("type", "hand.progress"),
+                source=str(event.get("source", "hand")),
+                thread_id=thread_id,
+                task_id=task_id,
+                repo_id=repo_id,
+                payload=event,
+            )
+
+        async def _gate(payload: Dict[str, Any]) -> str:
+            """Surface a destructive-permission request as approval.requested and block on it."""
+            return await self._await_approval(task_id, thread_id, payload)
+
         try:
             await self._db.update_task(task_id, status="running", updated_at=_now())
-            result = await self._hands.execute(request)
+            result = await self._hands.execute(request, event_sink=_sink, approval_gate=_gate)
             status = "completed" if result.status in ("completed", "ok", "steered") else "failed"
             for event in result.events_to_record:
                 await self._record_event(

@@ -70,7 +70,7 @@ class _FakeMemory:
 
 
 class _FakeHands:
-    async def execute(self, request):
+    async def execute(self, request, event_sink=None, approval_gate=None):
         return HandoffResult(status="completed", summary="done")
 
 

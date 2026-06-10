@@ -417,8 +417,8 @@ class Coordinator:
                 data={"task_id": task_id, "thread_id": thread_id, "approval_id": approval_id},
             )
 
-        # Build hands briefing from packet
-        briefing = self._briefing.build(packet, text) if self._briefing else text
+        # Build hands briefing from packet (delegation-brief seam)
+        briefing = await self.build_delegation_brief(packet, text)
 
         handoff = HandoffRequest(
             id=f"hof-{event_id}",
@@ -472,6 +472,46 @@ class Coordinator:
             pass
 
     # ------------------------------------------------------------------
+    # Delegation brief (Phase 1 seam; full memory injection is Phase 2)
+    # ------------------------------------------------------------------
+    async def build_delegation_brief(self, packet: ContextPacket, text: str) -> str:
+        """Assemble the brief handed to a coding hand.
+
+        Phase 1 seam: active repo + recent related task summaries from SQLite +
+        core memory blocks (when the memory store exposes them). The hot-path
+        ``BriefingBuilder`` renders the packet; here we enrich the packet with
+        durable context the hot cache does not carry. Phase 2 replaces the
+        recent-summaries scan with cue-driven memory injection.
+        """
+        try:
+            recent = await self._db.list_tasks()
+            summaries: List[str] = []
+            for t in recent[:5]:
+                desc = (t.get("description") or "")[:80]
+                status = t.get("status", "")
+                result = (t.get("result") or "")[:120]
+                if desc:
+                    summaries.append(f"- [{status}] {desc}" + (f" -> {result}" if result else ""))
+            if summaries:
+                existing = list(packet.relevant_recall or [])
+                packet.relevant_recall = existing + ["Recent tasks:"] + summaries
+        except Exception:
+            logger.debug("Recent task summary enrichment failed", exc_info=True)
+
+        try:
+            blocks = await self._memory.core_blocks() if hasattr(self._memory, "core_blocks") else None
+            if blocks:
+                packet.constraints = list(packet.constraints or []) + [
+                    f"{k}: {v}" for k, v in blocks.items() if v
+                ]
+        except Exception:
+            logger.debug("Core block enrichment failed", exc_info=True)
+
+        if self._briefing:
+            return self._briefing.build(packet, text)
+        return text
+
+    # ------------------------------------------------------------------
     # Approval response
     # ------------------------------------------------------------------
     async def _handle_approval_response(self, text: str, event_id: str) -> CoordinatorResponse:
@@ -509,7 +549,7 @@ class Coordinator:
             return None
         packet = await self._ctx.build(thread_id=task.get("thread_id"), task_id=task_id)
         text = task.get("description", "")
-        briefing = self._briefing.build(packet, text) if self._briefing else text
+        briefing = await self.build_delegation_brief(packet, text)
         handoff = HandoffRequest(
             id=f"hof-approved-{task_id}-{uuid.uuid4().hex[:8]}",
             to_capability="coding.start_task",

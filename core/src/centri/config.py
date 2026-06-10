@@ -49,8 +49,15 @@ class Settings:
     # OpenCode hand (CLI-based, no sidecar needed)
     opencode_cli: str = "opencode"
 
-    # Hands
-    enabled_hands: List[str] = field(default_factory=lambda: ["opencode"])
+    # ACP hand — command that launches an Agent Client Protocol agent over stdio.
+    # OpenCode's ACP serve mode is the default; any ACP-compatible binary works.
+    acp_command: str = ""
+    acp_opencode_command: str = "opencode acp"
+
+    # Hands. enabled_hands lists which hands to register; hand_priority is the
+    # preference order used by the router (a healthy higher-priority hand wins).
+    enabled_hands: List[str] = field(default_factory=lambda: ["acp", "opencode"])
+    hand_priority: List[str] = field(default_factory=lambda: ["acp", "opencode"])
 
     # Autonomy
     autonomy_level: str = "autonomous_local"
@@ -64,8 +71,10 @@ class Settings:
         db_path_str = os.getenv("CENTRI_DB_PATH", "~/.centri/state.db")
         db_path = Path(db_path_str).expanduser()
 
-        hands_raw = os.getenv("CENTRI_ENABLED_HANDS", "opencode")
+        hands_raw = os.getenv("CENTRI_ENABLED_HANDS", "acp,opencode")
         enabled_hands = [h.strip() for h in hands_raw.split(",") if h.strip()]
+        priority_raw = os.getenv("CENTRI_HAND_PRIORITY", "acp,opencode")
+        hand_priority = [h.strip() for h in priority_raw.split(",") if h.strip()]
 
         return cls(
             core_host=os.getenv("CENTRI_CORE_HOST", "127.0.0.1"),
@@ -89,7 +98,10 @@ class Settings:
             letta_api_key=os.getenv("CENTRI_LETTA_API_KEY", ""),
             letta_agent_id=os.getenv("CENTRI_LETTA_AGENT_ID", "centri-main"),
             opencode_cli=os.getenv("OPENCODE_CLI", "opencode"),
+            acp_command=os.getenv("CENTRI_ACP_COMMAND", ""),
+            acp_opencode_command=os.getenv("CENTRI_ACP_OPENCODE_COMMAND", "opencode acp"),
             enabled_hands=enabled_hands,
+            hand_priority=hand_priority,
             autonomy_level=os.getenv("CENTRI_AUTONOMY_LEVEL", "autonomous_local"),
             auto_commit=os.getenv("CENTRI_AUTO_COMMIT", "true").lower() == "true",
             auto_push=os.getenv("CENTRI_AUTO_PUSH", "false").lower() == "true",

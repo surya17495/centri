@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from centri.config import get_settings
-from centri.hands.base import Hand, HandHealth
+from centri.hands.base import ApprovalGate, EventSink, Hand, HandHealth
 from centri.schemas import HandCapability, HandoffRequest, HandoffResult
 
 logger = logging.getLogger(__name__)
@@ -160,7 +160,20 @@ class OpenCodeHand(Hand):
         except Exception as exc:
             return HandHealth(healthy=False, reason=str(exc))
 
-    async def execute(self, request: HandoffRequest) -> HandoffResult:
+    async def execute(
+        self,
+        request: HandoffRequest,
+        event_sink: Optional[EventSink] = None,
+        approval_gate: Optional[ApprovalGate] = None,
+    ) -> HandoffResult:
+        # The CLI runs to completion per invocation, so there is no live
+        # streaming channel; we emit a single "started" progress event through
+        # the sink for honest UI feedback, then run and return the result.
+        if event_sink is not None:
+            try:
+                await event_sink({"type": "hand.progress", "summary": "OpenCode subprocess started", "percent": 1})
+            except Exception:
+                pass
         if request.to_capability == "coding.steer_session":
             return await self._steer(request)
         if request.to_capability == "coding.status":
