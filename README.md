@@ -30,6 +30,16 @@ See [`docs/architecture.md`](docs/architecture.md),
 [`docs/event-contract.md`](docs/event-contract.md), and
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for detail.
 
+## Memory
+
+Events are the source of truth; memory is a derived, re-derivable index. Memory is
+modeled as four systems (episodic, semantic+supersession, prospective, procedural)
+captured at the moment work happens and injected into hand briefs without the user
+having to ask. Phase 0 ships the substrate (`MemoryStore`, `rebuild_from_events()`);
+the Phase 2 design and its falsifiable benchmark are specified in
+[`docs/memory-architecture.md`](docs/memory-architecture.md) and
+[`docs/centri-bench.md`](docs/centri-bench.md).
+
 ## Dev setup
 
 ```bash

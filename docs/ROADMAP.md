@@ -26,10 +26,23 @@ of CENTRI builds on.
 
 ## Phase 2 — Memory v1 + briefing
 
-- Memory synthesis worker: fold event batches into core blocks and archival facts
-  continuously.
-- Proactive briefing ("what changed, what's blocked, what's next").
+Design: [`memory-architecture.md`](memory-architecture.md). Benchmark:
+[`centri-bench.md`](centri-bench.md).
+
+- Memory synthesis worker ("sleep cycle"): fold event batches into typed
+  decision/fact/open-loop objects and core blocks continuously — typed objects
+  with receipts, never freeform prose; conflicts resolved by supersession.
+- Cue-driven injection: assemble relevant decisions, rejections, conventions, and
+  open alternatives into the hand brief at delegation/session-start/repo-open.
+- Proactive briefing ("what changed, what's blocked, what's next") plus dormancy
+  detection (one yes/no line per dormant loop, the only allowed spoonfeeding).
 - Prove re-derivability at scale via `rebuild_from_events()`.
+- Escape-hatch validation: `LettaMemoryStore` adapter run head-to-head against
+  CENTRI native in `centri-bench`.
+
+**Anti-gaming rule:** `centri-bench` tasks are written *before* Phase 2
+implementation starts — `docs/centri-bench.md` is that commitment, so the
+implementation cannot quietly target the test.
 
 ## Phase 3 — Voice
 
