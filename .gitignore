@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Secrets / local config
+.env
+.env.*
+!.env.example
+
+# Databases
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Node / Tauri (Phase 1 shell)
+node_modules/
+dist-ssr/
+*.local
+src-tauri/target/
+.tauri/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
