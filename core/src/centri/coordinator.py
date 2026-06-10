@@ -1,0 +1,590 @@
+"""CENTRI coordinator -- the brain.
+
+Understand -> decide -> act -> narrate -> remember.
+
+Hot path (<50ms):
+  - HotContextCache gives recent events/thread/task/repo/session instantly.
+  - DB + memory are fire-and-forget for background enrichment.
+"""
+
+import asyncio
+import json
+import logging
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+from centri.schemas import (
+    ContextPacket,
+    CoordinatorResponse,
+    HandoffRequest,
+    RepoState,
+    SessionState,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class Coordinator:
+    """Main brain."""
+
+    def __init__(
+        self,
+        db: Any,
+        model_router: Any,
+        memory: Any,
+        context_assembler: Any,
+        permissions: Any,
+        hands: Any,
+        jobs: Any,
+        artifacts: Any,
+        desktop: Optional[Any] = None,
+        event_bus: Optional[Any] = None,
+        hot_cache: Optional[Any] = None,
+        briefing_builder: Optional[Any] = None,
+    ):
+        self._db = db
+        self._mr = model_router
+        self._memory = memory
+        self._ctx = context_assembler
+        self._perm = permissions
+        self._hands = hands
+        self._jobs = jobs
+        self._artifacts = artifacts
+        self._desktop = desktop
+        self._event_bus = event_bus
+        self._hot_cache = hot_cache
+        self._briefing = briefing_builder
+
+    async def _publish(self, event: Dict[str, Any]) -> None:
+        if self._event_bus is not None:
+            try:
+                await self._event_bus.publish(event)
+            except Exception:
+                pass
+
+    async def _record_event(
+        self,
+        event_type: str,
+        *,
+        source: str = "coordinator",
+        thread_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+        repo_id: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        ts = _now()
+        body = dict(payload or {})
+        event: Dict[str, Any] = {
+            "type": event_type,
+            "ts": ts,
+            "source": source,
+            "thread_id": thread_id,
+            "task_id": task_id,
+            "repo_id": repo_id,
+            "payload": body,
+        }
+        for key in ("status", "summary", "session_uid", "text", "user_id", "response_type", "message", "approval_id", "label", "risk", "description"):
+            if key in body:
+                event[key] = body[key]
+        await self._db.append_event(
+            event_id=f"evt-{uuid.uuid4().hex[:12]}",
+            type=event_type,
+            source=source,
+            ts=ts,
+            thread_id=thread_id,
+            task_id=task_id,
+            repo_id=repo_id,
+            payload=body,
+        )
+        await self._publish(event)
+
+    async def _narrate(self, message: str) -> None:
+        """Fire a narrate event for the voice TTS to pick up."""
+        await self._record_event("narrate", source="coordinator", payload={"text": message})
+
+    # ------------------------------------------------------------------
+    # Main entry
+    # ------------------------------------------------------------------
+    async def handle_utterance(
+        self,
+        text: str,
+        user_id: str,
+        source: str = "voice",
+    ) -> CoordinatorResponse:
+        # Voice greeting is a special path
+        if text == "__voice_greeting__":
+            greeting = self._mr.narrate("Greet the user and offer your assistance.", voice=True)
+            await self._narrate(greeting)
+            return CoordinatorResponse(response_type="greeting", message=greeting)
+
+        await self._db.store_message(
+            channel=source,
+            user_id=user_id,
+            direction="in",
+            content=text,
+            ts=_now(),
+            is_voice=(source == "voice"),
+        )
+        event_id = f"evt-{_now()}"
+        await self._db.append_event(
+            event_id=event_id,
+            type="user.utterance",
+            source=source,
+            ts=_now(),
+            payload={"text": text, "user_id": user_id},
+        )
+        await self._publish({"type": "user.utterance", "text": text, "user_id": user_id, "ts": _now()})
+
+        # Build context in parallel with memory recall
+        packet, _recall = await self._build_context_parallel(text)
+
+        intent = self._classify_intent(text, packet)
+        if intent == "status":
+            resp = await self._handle_status(packet, event_id)
+        elif intent == "steering":
+            resp = await self._handle_steering(text, packet, event_id)
+        elif intent == "coding_task":
+            resp = await self._handle_coding_task(text, packet, event_id)
+        elif intent == "approval_response":
+            resp = await self._handle_approval_response(text, event_id)
+        elif intent == "stop":
+            resp = CoordinatorResponse(response_type="info", message="Stopping.")
+        else:
+            resp = await self._handle_general(text, packet, event_id)
+
+        # Narrate if this came from voice and isn't already an error/approval flow
+        if source == "desktop_voice" and resp.response_type not in ("approval_requested", "error"):
+            await self._narrate(resp.message)
+
+        await self._record_event(
+            "coordinator.response",
+            source="coordinator",
+            thread_id=resp.data.get("thread_id") if isinstance(resp.data, dict) else None,
+            task_id=resp.data.get("task_id") if isinstance(resp.data, dict) else None,
+            payload={
+                "response_type": resp.response_type,
+                "message": resp.message,
+                "data": resp.data,
+            },
+        )
+        return resp
+
+    # ------------------------------------------------------------------
+    # Context assembly (parallel enrichment)
+    # ------------------------------------------------------------------
+    async def _build_context_parallel(self, text: str) -> tuple[ContextPacket, List[str]]:
+        """Assemble hot context from cache; kick off DB+memory in background.
+
+        Hot path: reads from hot_cache instantly (<50ms). No DB or memory wait.
+        Background: rebuild full context and backfill cache + recall.
+        """
+        if self._hot_cache is not None:
+            hot_snap = await self._hot_cache.get()
+        else:
+            hot_snap = None
+
+        if hot_snap and hot_snap.last_updated:
+            # Warm cache — return immediately with whatever recall is cached
+            packet = self._snapshot_to_packet(hot_snap, list(hot_snap.relevant_recall))
+            # Background: fetch DB + fresh memory and backfill cache
+            asyncio.create_task(self._enrich_cache_from_db(text))
+            return packet, list(hot_snap.relevant_recall)
+
+        # Cold cache / no cache — fallback to DB + wait for recall
+        logger.debug("Hot cache cold; falling back to DB build")
+        packet = await self._ctx.build()
+        recall = []
+        try:
+            recall = await asyncio.wait_for(self._memory.recall(text, limit=3), timeout=3.0)
+        except asyncio.TimeoutError:
+            logger.debug("Memory recall timed out; using empty recall")
+        packet.relevant_recall = recall
+        return packet, recall
+
+    # ------------------------------------------------------------------
+    # Snapshot helpers
+    # ------------------------------------------------------------------
+    def _snapshot_to_packet(self, snap: Any, recall: List[str]) -> ContextPacket:
+        """Turn a HotContextSnapshot into a ContextPacket for downstream."""
+        repo_state = None
+        if getattr(snap, "repo_id", None) or getattr(snap, "repo_name", None):
+            repo_state = RepoState(
+                id=getattr(snap, "repo_id", None),
+                name=getattr(snap, "repo_name", ""),
+                root="",
+                branch=getattr(snap, "repo_branch", None),
+                dirty=getattr(snap, "repo_dirty", False),
+                ahead=0,
+                behind=0,
+                last_seen=None,
+            )
+        session_state = None
+        if getattr(snap, "session_uid", None):
+            session_state = SessionState(
+                id=snap.session_uid,
+                session_uid=snap.session_uid,
+                hand="opencode",
+                status=getattr(snap, "session_status", "unknown"),
+                repo_id=getattr(snap, "repo_id", None),
+                summary="",
+                last_seen=None,
+            )
+        current_task = None
+        if getattr(snap, "active_task_id", None):
+            current_task = {"id": snap.active_task_id, "task_id": snap.active_task_id}
+        active_thread = None
+        if getattr(snap, "active_thread_id", None):
+            active_thread = {"id": snap.active_thread_id}
+        return ContextPacket(
+            active_thread=active_thread,
+            current_task=current_task,
+            repo_state=repo_state,
+            session_state=session_state,
+            recent_events=list(getattr(snap, "recent_events", [])),
+            letta_identity=getattr(snap, "letta_identity", None),
+            relevant_recall=recall,
+            constraints=list(getattr(snap, "constraints", [])),
+        )
+
+    async def _enrich_cache_from_db(self, text: str) -> None:
+        """Build full context from DB and backfill hot_cache."""
+        try:
+            packet = await self._ctx.build()
+            # Also fetch fresh memory recall
+            try:
+                recall = await asyncio.wait_for(self._memory.recall(text, limit=3), timeout=3.0)
+                packet.relevant_recall = recall
+            except asyncio.TimeoutError:
+                logger.debug("Memory recall timed out during background enrichment")
+            if self._hot_cache is not None:
+                await self._hot_cache.update_from_packet(packet)
+            # Publish enriched context so any downstream listeners are consistent
+            if self._event_bus is not None:
+                await self._event_bus.publish({
+                    "type": "context.updated",
+                    "payload": {
+                        "session_uid": packet.session_state.session_uid if packet.session_state else None,
+                        "status": packet.session_state.status if packet.session_state else "unknown",
+                        "repo_id": packet.repo_state.id if packet.repo_state else None,
+                        "repo_name": packet.repo_state.name if packet.repo_state else None,
+                        "repo_branch": packet.repo_state.branch if packet.repo_state else None,
+                        "repo_dirty": packet.repo_state.dirty if packet.repo_state else False,
+                    },
+                    "ts": _now(),
+                })
+        except Exception:
+            logger.debug("Background enrichment failed", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Identity background hook
+    # ------------------------------------------------------------------
+    async def _background_identity(self) -> None:
+        try:
+            identity = await self._memory.identity()
+            if identity and self._event_bus:
+                await self._event_bus.publish({
+                    "type": "identity.updated",
+                    "payload": {
+                        "identity": json.dumps(identity)[:500],
+                    },
+                    "ts": _now(),
+                })
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Intent classification
+    # ------------------------------------------------------------------
+    def _classify_intent(self, text: str, packet: ContextPacket) -> str:
+        lowered = text.strip().lower()
+        if any(k in lowered for k in ["status", "what's going on", "what is happening", "what's happening"]):
+            return "status"
+        if any(k in lowered for k in ["tell it to", "steer", "send message to", "give it"]):
+            return "steering"
+        if any(k in lowered for k in ["fix", "implement", "create", "add", "write", "build", "test", "run tests", "refactor", "solve"]):
+            return "coding_task"
+        if any(k in lowered for k in ["approve", "reject", "cancel that", "yes do it", "no don't"]):
+            return "approval_response"
+        if any(k in lowered for k in ["stop", "halt", "pause"]):
+            return "stop"
+        try:
+            llm_intent = self._mr.classify_intent(text, context=str(packet.recent_events[:3]))
+            if llm_intent in ("status", "steering", "coding_task", "approval_response", "stop"):
+                return llm_intent
+        except Exception:
+            pass
+        return "general"
+
+    # ------------------------------------------------------------------
+    # Status
+    # ------------------------------------------------------------------
+    async def _handle_status(self, packet: ContextPacket, event_id: str) -> CoordinatorResponse:
+        repo = packet.repo_state
+        session = packet.session_state
+        pending = await self._db.pending_approvals()
+        running = await self._db.list_tasks(status="running")
+        blockers: list[str] = packet.constraints if packet.constraints else []
+        ctx_str = self._packet_summary(packet)
+        message = self._mr.summarize_status(ctx_str)
+        await self._db.append_event(
+            event_id=f"{event_id}-status",
+            type="coordinator.status",
+            source="coordinator",
+            ts=_now(),
+            payload={"pending_approvals": len(pending), "running_tasks": len(running)},
+        )
+        return CoordinatorResponse(
+            response_type="status",
+            message=message,
+            data={
+                "repo": repo.name if repo else None,
+                "session": session.session_uid if session else None,
+                "running_tasks": len(running),
+                "pending_approvals": len(pending),
+                "blockers": blockers,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Steering
+    # ------------------------------------------------------------------
+    async def _handle_steering(
+        self, text: str, packet: ContextPacket, event_id: str
+    ) -> CoordinatorResponse:
+        action = "coding.steer_session"
+        allowed = self._perm.assert_allowed(action, {})
+        if allowed == "blocked":
+            return CoordinatorResponse(response_type="error", message="Steering is currently blocked.")
+        if allowed == "approval_required":
+            await self._create_approval(event_id, None, None, "Steer active session", text, "low", action)
+            return CoordinatorResponse(response_type="approval_requested", message="Steering requires approval first.")
+
+        # Build hands briefing from packet
+        briefing = self._briefing.build(packet, text) if self._briefing else text
+
+        handoff = HandoffRequest(
+            id=f"hof-{event_id}",
+            to_capability="coding.steer_session",
+            user_intent=briefing,
+            context=packet,
+        )
+        result = await self._hands.execute(handoff)
+        narration = self._mr.narrate(result.summary)
+        return CoordinatorResponse(response_type="steering", message=narration, data={"summary": result.summary})
+
+    # ------------------------------------------------------------------
+    # Coding task
+    # ------------------------------------------------------------------
+    async def _handle_coding_task(
+        self, text: str, packet: ContextPacket, event_id: str
+    ) -> CoordinatorResponse:
+        action = "coding.start_task"
+        allowed = self._perm.assert_allowed(action, {})
+        if allowed == "blocked":
+            return CoordinatorResponse(response_type="error", message="Coding tasks are blocked right now.")
+
+        thread_id = f"th-{uuid.uuid4().hex[:8]}"
+        task_id = f"tk-{uuid.uuid4().hex[:8]}"
+        repo_id = packet.repo_state.id if packet.repo_state else None
+        await self._db.create_thread(
+            thread_id=thread_id,
+            title=text[:80],
+            goal=text,
+            repo_id=repo_id,
+            created_at=_now(),
+            updated_at=_now(),
+        )
+        await self._db.create_task(
+            task_id=task_id,
+            thread_id=thread_id,
+            description=text,
+            created_at=_now(),
+            updated_at=_now(),
+        )
+
+        if allowed == "approval_required":
+            approval = await self._create_approval(event_id, task_id, thread_id, text[:80], text, "medium", action)
+            approval_id = approval["approval_id"] if approval else None
+            await self._publish({"type": "approval.requested", "approval_id": approval_id, "task_id": task_id, "label": text[:80], "ts": _now()})
+            return CoordinatorResponse(
+                response_type="approval_requested",
+                message="I'll start that once you approve.",
+                data={"task_id": task_id, "thread_id": thread_id, "approval_id": approval_id},
+            )
+
+        # Build hands briefing from packet
+        briefing = self._briefing.build(packet, text) if self._briefing else text
+
+        handoff = HandoffRequest(
+            id=f"hof-{event_id}",
+            to_capability="coding.start_task",
+            user_intent=briefing,
+            context=packet,
+            risk="medium",
+            approval_required=False,
+        )
+        job_id = await self._jobs.start(handoff, task_id=task_id)
+        await self._db.update_task(
+            task_id=task_id,
+            status="running",
+            hand="opencode",
+            capability="coding.start_task",
+            updated_at=_now(),
+        )
+
+        # Fire-and-forget Letta learn
+        asyncio.create_task(
+            self._background_learn(
+                {
+                    "type": "task.started",
+                    "task_id": task_id,
+                    "thread_id": thread_id,
+                    "repo_id": repo_id,
+                    "description": text,
+                }
+            )
+        )
+
+        await self._record_event(
+            "task.started",
+            source="coordinator",
+            thread_id=thread_id,
+            task_id=task_id,
+            repo_id=repo_id,
+            payload={"description": text, "status": "running"},
+        )
+        narration = self._mr.narrate(f"Started task: {text}.")
+        return CoordinatorResponse(
+            response_type="task_created",
+            message=narration,
+            data={"task_id": task_id, "thread_id": thread_id, "job_id": job_id},
+        )
+
+    async def _background_learn(self, event: Dict[str, Any]) -> None:
+        try:
+            await self._memory.learn(event)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Approval response
+    # ------------------------------------------------------------------
+    async def _handle_approval_response(self, text: str, event_id: str) -> CoordinatorResponse:
+        lowered = text.strip().lower()
+        action = "approved" if any(k in lowered for k in ["approve", "yes", "do it"]) else (
+            "rejected" if any(k in lowered for k in ["reject", "no", "cancel"]) else None
+        )
+        if action is None:
+            return CoordinatorResponse(response_type="error", message="Did you want to approve or reject?")
+        pending = await self._db.pending_approvals()
+        if not pending:
+            return CoordinatorResponse(response_type="error", message="No pending approvals.")
+        target = pending[0]
+        await self._db.resolve_approval(
+            approval_id=target["id"],
+            status=action,
+            responded_by="user",
+            responded_at=_now(),
+        )
+        task_id = target.get("task_id")
+        if action == "approved" and task_id:
+            await self.start_approved_task(task_id)
+        elif action == "rejected" and task_id:
+            await self._jobs.cancel(task_id)
+        await self._publish({"type": "approval.resolved", "approval_id": target["id"], "action": action, "ts": _now()})
+        return CoordinatorResponse(
+            response_type="approval_resolved",
+            message=f"Approval {action}.",
+            data={"approval_id": target["id"], "task_id": task_id, "action": action},
+        )
+
+    async def start_approved_task(self, task_id: str) -> Optional[str]:
+        task = await self._db.get_task(task_id)
+        if not task:
+            return None
+        packet = await self._ctx.build(thread_id=task.get("thread_id"), task_id=task_id)
+        text = task.get("description", "")
+        briefing = self._briefing.build(packet, text) if self._briefing else text
+        handoff = HandoffRequest(
+            id=f"hof-approved-{task_id}-{uuid.uuid4().hex[:8]}",
+            to_capability="coding.start_task",
+            user_intent=briefing,
+            context=packet,
+            risk="medium",
+            approval_required=False,
+        )
+        job_id = await self._jobs.start(handoff, task_id=task_id)
+        await self._db.update_task(
+            task_id=task_id,
+            status="running",
+            hand="opencode",
+            capability="coding.start_task",
+            updated_at=_now(),
+        )
+        await self._publish({
+            "type": "task.started",
+            "task_id": task_id,
+            "description": task.get("description", ""),
+            "ts": _now(),
+        })
+        return job_id
+
+    # ------------------------------------------------------------------
+    # General / fallback
+    # ------------------------------------------------------------------
+    async def _handle_general(
+        self, text: str, packet: ContextPacket, event_id: str
+    ) -> CoordinatorResponse:
+        reply = self._mr.reason(f"User said: {text}\nContext: {self._packet_summary(packet)}\nReply concisely.", output_schema=None)
+        return CoordinatorResponse(response_type="info", message=reply or "I'm here.")
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    async def _create_approval(
+        self,
+        event_id: str,
+        task_id: Optional[str],
+        thread_id: Optional[str],
+        label: str,
+        detail: str,
+        risk: str,
+        action: str,
+    ) -> Dict[str, Any]:
+        approval_id = f"apv-{uuid.uuid4().hex[:8]}"
+        await self._db.create_approval(
+            approval_id=approval_id,
+            task_id=task_id,
+            thread_id=thread_id,
+            label=label,
+            detail=detail,
+            risk=risk,
+            requested_action=action,
+            requested_at=_now(),
+        )
+        await self._db.append_event(
+            event_id=f"{event_id}-approval",
+            type="approval.requested",
+            source="coordinator",
+            ts=_now(),
+            task_id=task_id,
+            payload={"approval_id": approval_id, "label": label, "risk": risk},
+        )
+        return {"approval_id": approval_id}
+
+    def _packet_summary(self, packet: ContextPacket) -> str:
+        parts = []
+        if packet.repo_state:
+            parts.append(f"Repo: {packet.repo_state.name} ({packet.repo_state.branch})")
+        if packet.session_state:
+            parts.append(f"Session: {packet.session_state.session_uid} {packet.session_state.status}")
+        if packet.current_task:
+            parts.append(f"Task: {packet.current_task.get('description', '')}")
+        if packet.recent_events:
+            parts.append(f"Recent events: {len(packet.recent_events)}")
+        return "\n".join(parts)
