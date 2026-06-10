@@ -15,11 +15,13 @@ production").
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from centri.memory_graph import (
+    LOOP_DORMANT,
     LOOP_OPEN,
     STANCE_REJECTED,
     Decision,
@@ -140,3 +142,83 @@ class MemoryBriefAssembler:
             conventions=rank_facts(facts),
             open_loops=rank_loops(loops),
         )
+
+
+@dataclass
+class ProactiveBrief:
+    """The unprompted 'what changed / what's blocked / what's next' summary."""
+
+    changed: List[str] = field(default_factory=list)
+    blocked: List[str] = field(default_factory=list)
+    next_steps: List[str] = field(default_factory=list)
+    dormancy_questions: List[str] = field(default_factory=list)
+
+    def is_empty(self) -> bool:
+        return not (self.changed or self.blocked or self.next_steps or self.dormancy_questions)
+
+    def render(self) -> str:
+        lines: List[str] = []
+        if self.changed:
+            lines.append("What changed:")
+            lines += [f"  - {c}" for c in self.changed]
+        if self.blocked:
+            lines.append("What's blocked:")
+            lines += [f"  - {b}" for b in self.blocked]
+        if self.next_steps:
+            lines.append("What's next:")
+            lines += [f"  - {n}" for n in self.next_steps]
+        if self.dormancy_questions:
+            # The one allowed piece of spoonfeeding: a yes/no per dormant loop.
+            lines += self.dormancy_questions
+        return "\n".join(lines)
+
+
+class ProactiveBriefBuilder:
+    """Assembles the proactive briefing from the ledger and the typed graph.
+
+    Read-only and re-derivable: 'what changed' comes from recent
+    ``memory.synthesized`` events, 'what's blocked' from failed/blocked tasks,
+    'what's next' from open loops (prospective memory surfaced unprompted), and
+    the dormancy questions from loops already marked dormant by the scheduler.
+    """
+
+    def __init__(self, db: Any, graph: MemoryGraph):
+        self._db = db
+        self._graph = graph
+
+    async def build(self, repo_id: Optional[str] = None, window: int = 50) -> ProactiveBrief:
+        await self._graph.ensure_tables()
+        brief = ProactiveBrief()
+
+        try:
+            events = await self._db.recent_events(limit=window)
+        except Exception:
+            events = []
+        for ev in events:
+            etype = ev.get("type", "")
+            payload = ev.get("payload_json")
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except (TypeError, ValueError):
+                    payload = {}
+            payload = payload or {}
+            if etype == "memory.synthesized":
+                summary = payload.get("summary") or ""
+                if summary:
+                    brief.changed.append(summary)
+            elif etype in ("task.failed", "hand.failed", "hand.blocked"):
+                desc = payload.get("error") or payload.get("summary") or payload.get("description") or etype
+                brief.blocked.append(str(desc)[:160])
+        brief.changed = brief.changed[:5]
+        brief.blocked = brief.blocked[:5]
+
+        open_loops = await self._graph.open_loops(repo_id=repo_id, states=[LOOP_OPEN])
+        for loop in open_loops[:5]:
+            brief.next_steps.append(loop.intent)
+
+        dormant = await self._graph.open_loops(repo_id=repo_id, states=[LOOP_DORMANT])
+        for loop in dormant[:3]:
+            brief.dormancy_questions.append(f'Still pursuing "{loop.intent}", or park it?')
+
+        return brief

@@ -162,6 +162,40 @@ async def reject(approval_id: str) -> Dict[str, Any]:
     return {"approval_id": approval_id, "status": "rejected", "task_id": task_id}
 
 
+@app.get("/briefing")
+async def get_briefing() -> Dict[str, Any]:
+    """Proactive 'what changed / what's blocked / what's next' brief (Phase 2)."""
+    if runtime.proactive_brief is None:
+        return {"available": False, "reason": "memory system not booted"}
+    brief = await runtime.proactive_brief.build()
+    return {
+        "available": True,
+        "changed": brief.changed,
+        "blocked": brief.blocked,
+        "next_steps": brief.next_steps,
+        "dormancy_questions": brief.dormancy_questions,
+        "text": brief.render(),
+    }
+
+
+@app.get("/memory/graph")
+async def get_memory_graph() -> Dict[str, Any]:
+    """Current typed-memory view: live decisions, conventions, open loops."""
+    if runtime.memory_graph is None:
+        return {"available": False, "reason": "memory system not booted"}
+    g = runtime.memory_graph
+    decisions = await g.current_decisions()
+    facts = await g.current_facts()
+    loops = await g.open_loops()
+    return {
+        "available": True,
+        "counts": await g.counts(),
+        "decisions": [d.__dict__ for d in decisions],
+        "facts": [f.__dict__ for f in facts],
+        "open_loops": [loop.__dict__ for loop in loops],
+    }
+
+
 @app.get("/threads")
 async def get_threads() -> Dict[str, Any]:
     threads = await runtime.db.list_threads()
