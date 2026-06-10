@@ -46,6 +46,7 @@ class Coordinator:
         event_bus: Optional[Any] = None,
         hot_cache: Optional[Any] = None,
         briefing_builder: Optional[Any] = None,
+        memory_brief: Optional[Any] = None,
     ):
         self._db = db
         self._mr = model_router
@@ -59,6 +60,8 @@ class Coordinator:
         self._event_bus = event_bus
         self._hot_cache = hot_cache
         self._briefing = briefing_builder
+        # Phase 2 cue-driven memory injection (MemoryBriefAssembler).
+        self._memory_brief = memory_brief
 
     async def _publish(self, event: Dict[str, Any]) -> None:
         if self._event_bus is not None:
@@ -477,12 +480,27 @@ class Coordinator:
     async def build_delegation_brief(self, packet: ContextPacket, text: str) -> str:
         """Assemble the brief handed to a coding hand.
 
-        Phase 1 seam: active repo + recent related task summaries from SQLite +
-        core memory blocks (when the memory store exposes them). The hot-path
-        ``BriefingBuilder`` renders the packet; here we enrich the packet with
-        durable context the hot cache does not carry. Phase 2 replaces the
-        recent-summaries scan with cue-driven memory injection.
+        Phase 2: cue-driven memory injection. The terse ``text`` is the cue; the
+        :class:`~centri.memory_brief.MemoryBriefAssembler` pulls the relevant
+        decisions, rejected approaches, conventions, and open loops out of the
+        typed graph and pushes them into the brief — the same path
+        ``centri-bench`` measures for *brief completeness*. The Phase 1 recent-task
+        scan and core-block enrichment remain as a fallback layer beneath it.
         """
+        # Phase 2 cue-driven injection from the typed memory graph.
+        repo_id = packet.repo_state.id if packet.repo_state else None
+        if self._memory_brief is not None:
+            try:
+                section = await self._memory_brief.assemble(text, repo_id=repo_id)
+                # Stash the structured section so callers (and the bench) can
+                # inspect exactly what was injected, not just the rendered prose.
+                self._last_memory_section = section
+                if not section.is_empty():
+                    existing = list(packet.relevant_recall or [])
+                    packet.relevant_recall = existing + [section.render()]
+            except Exception:
+                logger.debug("Cue-driven memory injection failed", exc_info=True)
+
         try:
             recent = await self._db.list_tasks()
             summaries: List[str] = []

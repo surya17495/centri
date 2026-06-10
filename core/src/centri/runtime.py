@@ -32,6 +32,9 @@ class Runtime:
         self.notifier: Any = None
         self.hot_cache: Any = None
         self.briefing_builder: Any = None
+        self.memory_graph: Any = None
+        self.consolidator: Any = None
+        self.memory_brief: Any = None
         self._background_tasks: list[asyncio.Task] = []
 
     async def boot(self) -> None:
@@ -51,6 +54,9 @@ class Runtime:
         from centri.context_cache import HotContextCache
         from centri.briefing import BriefingBuilder
         from centri.event_bus import EventBus
+        from centri.memory_graph import MemoryGraph
+        from centri.consolidation import Consolidator
+        from centri.memory_brief import MemoryBriefAssembler
 
         settings = get_settings()
         logger.info("CENTRI booting...")
@@ -77,14 +83,28 @@ class Runtime:
         self.hot_cache = HotContextCache()
         self.briefing_builder = BriefingBuilder()
 
+        # 6b. Phase 2 typed memory graph + consolidation worker + cue injection
+        self.memory_graph = MemoryGraph(self.db)
+        await self.memory_graph.ensure_tables()
+        self.consolidator = Consolidator(self.db, self.memory_graph, event_bus=self.event_bus)
+        self.memory_brief = MemoryBriefAssembler(self.memory_graph)
+
         # 7. Hands
         self.hands = Hands(settings, self.db)
 
         # 8. Jobs
         self.jobs = Jobs(self.db, self.hands, self.permissions, self.event_bus, memory=self.memory)
 
-        # 9. Scheduler
-        self.scheduler = Scheduler(self.db, self.jobs, self.memory, self.observability)
+        # 9. Scheduler (carries the consolidation worker + dormancy detection)
+        self.scheduler = Scheduler(
+            self.db,
+            self.jobs,
+            self.memory,
+            self.observability,
+            consolidator=self.consolidator,
+            memory_graph=self.memory_graph,
+            event_bus=self.event_bus,
+        )
 
         # 10. Model router
         self.model_router = ModelRouter()
@@ -112,6 +132,7 @@ class Runtime:
             event_bus=self.event_bus,
             hot_cache=self.hot_cache,
             briefing_builder=self.briefing_builder,
+            memory_brief=self.memory_brief,
         )
 
         # 15. Wire event bus -> hot cache
