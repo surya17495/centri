@@ -17,12 +17,34 @@ of CENTRI builds on.
   (stub) both satisfy it.
 - FastAPI app boots; `/health` and `/status` respond; vertical-slice test passes.
 
-## Phase 1 — Coding loop (text-first) + Tauri shell
+## Phase 1 — Coding loop (text-first) + Tauri shell  ✅ implemented
 
-- Tauri 2 + React desktop shell over HTTP + `/events/stream`.
-- Implement the ACP wire protocol (JSON-RPC over stdio) so `AcpHand` runs real
-  external agents alongside OpenCode.
-- End-to-end text-first coding loop with live progress, artifacts, and approvals.
+Status: backend + React frontend **sandbox-verified**; Tauri desktop binary
+**scaffolded, needs a local Rust toolchain** to compile (cargo absent from the
+build sandbox).
+
+- ✅ Real ACP wire protocol (JSON-RPC over stdio) in `AcpHand`: initialize →
+  session lifecycle → prompt turns, streaming `session/update` mapped to live
+  `task.progress`/`hand.progress`, `session/request_permission` round-tripped
+  through the approval gate, and cancellation. Verified by `test_acp_hand.py`
+  against a scripted fake ACP agent over real stdio.
+- ✅ Router prefers a healthy ACP hand and falls back to the OpenCode subprocess;
+  health is reported honestly for both. ACP command is configurable per hand.
+- ✅ Streaming seam: hand progress flows hand → jobs → event bus → WebSocket live
+  (no completion-only capture). Destructive permissions surface as
+  `approval.requested`; UI resolution returns over ACP; timeout denies with reason.
+- ✅ Delegation-brief seam (`build_delegation_brief`): active repo + recent related
+  task summaries + core memory blocks assembled into the hand brief. (Full
+  cue-driven memory injection is Phase 2.)
+- ✅ Tauri 2 + React + TS + Tailwind desktop shell in `shell/` over HTTP +
+  `/events/stream`: activity timeline, streaming task cards, inline approval cards,
+  command bar, status strip, settings panel. Runs in-browser via `vite dev`;
+  `tsc --noEmit` + `vite build` + vitest component tests pass.
+- ✅ End-to-end text-first coding loop verified by `scripts/smoke_phase1.sh`
+  (command → task → streamed events → approval round-trip over a live WebSocket).
+- ⏳ Tauri desktop binary: scaffolded (`shell/src-tauri/`, single resizable window,
+  480px min, dark theme, capabilities, global-shortcut stub) but must be built
+  locally with cargo — not verified in-sandbox.
 
 ## Phase 2 — Memory v1 + briefing
 

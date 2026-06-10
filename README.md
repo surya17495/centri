@@ -6,9 +6,11 @@ external coding agents and keeps durable, auditable track of everything that
 happens. It is model-agnostic — bring your own LLM stack (BYOK) or, later, use a
 bundled subscription.
 
-Coding work is delegated through a **hand** abstraction. The default bundled hand
-is OpenCode (driven as a CLI subprocess); the Agent Client Protocol (ACP, JSON-RPC
-over stdio) hand lands in Phase 1 so any ACP-compatible agent can be plugged in.
+Coding work is delegated through a **hand** abstraction. As of Phase 1 the default
+hand is the Agent Client Protocol (ACP, JSON-RPC over stdio) client, which streams
+live progress and round-trips destructive-action permission requests through
+CENTRI's approval gate; any ACP-compatible agent (OpenCode, etc.) can be plugged in
+by command. The original OpenCode CLI subprocess remains as a fallback hand.
 
 The core design principle is that **events are the source of truth; memory is a
 derived, re-derivable index.** Every runtime event is written to an append-only
@@ -18,13 +20,13 @@ replaying that ledger. Nothing in memory is authoritative; the spine is.
 
 ## Architecture
 
-| Layer        | Phase 0 status            | What it is                                                        |
-|--------------|---------------------------|-------------------------------------------------------------------|
-| Shell        | Phase 1 (not yet)         | Tauri 2 + React desktop surface (voice/text)                      |
-| Coordinator  | working                   | Python core: understand → decide → act → narrate → remember       |
-| Event spine  | working                   | SQLite append-only ledger + in-memory bus, **redaction on write** |
-| Memory       | skeleton (`MemoryStore`)  | Derived, re-derivable index over the spine; Letta optional        |
-| Hands        | OpenCode working, ACP stub| Capability router over the `Hand` ABC (OpenCode + ACP)            |
+| Layer        | Status                        | What it is                                                        |
+|--------------|-------------------------------|-------------------------------------------------------------------|
+| Shell        | Phase 1: React verified, Tauri scaffolded | Tauri 2 + React desktop surface (text now, voice later) |
+| Coordinator  | working                       | Python core: understand → decide → act → narrate → remember       |
+| Event spine  | working                       | SQLite append-only ledger + in-memory bus, **redaction on write** |
+| Memory       | skeleton (`MemoryStore`)      | Derived, re-derivable index over the spine; Letta optional        |
+| Hands        | ACP + OpenCode working        | Capability router over the `Hand` ABC; ACP preferred, OpenCode fallback |
 
 See [`docs/architecture.md`](docs/architecture.md),
 [`docs/event-contract.md`](docs/event-contract.md), and
@@ -67,15 +69,34 @@ curl localhost:8760/status
 
 ## What works now (honest)
 
-- **Working:** event spine with redaction-before-persistence; FastAPI app with
-  `/health`, `/status`, `/utterance`, tasks/approvals/threads/events,
-  `/events/stream` WebSocket; coordinator intent → handoff → job loop; OpenCode
-  hand (when the `opencode` CLI is on PATH); SQLite memory store with
-  `rebuild_from_events()`; BYOK model router.
-- **Honest-unavailable:** the ACP hand (Phase 1 wire protocol); voice endpoints
-  (Phase 3); Letta semantic memory unless `CENTRI_LETTA_URL` is configured. These
-  report unavailable-with-reason rather than faking success.
-- **Not here yet:** the Tauri shell, voice, memory synthesis worker, subscriptions.
+This distinguishes **sandbox-verified** (proven in CI/the dev sandbox) from
+**needs-local-build** (correct by construction but requires a toolchain not present
+in the sandbox — namely Rust/cargo for the Tauri desktop binary).
+
+- **Sandbox-verified (backend):** event spine with redaction-before-persistence;
+  FastAPI app with `/health`, `/status`, `/utterance`, tasks/approvals/threads/events,
+  `/events/stream` WebSocket; coordinator intent → handoff → job loop; the **real ACP
+  hand** speaking JSON-RPC over stdio (initialize → session lifecycle → prompt turns,
+  streaming `session/update` → live `task.progress`/`hand.progress`, permission
+  requests → approval gate, cancellation); router prefers a healthy ACP hand and falls
+  back to the OpenCode subprocess; delegation-brief seam enriching hand briefs with
+  recent task summaries; SQLite memory store with `rebuild_from_events()`; BYOK model
+  router. Covered by `pytest core/tests/` (46 tests incl. ACP client tests against a
+  scripted fake agent) and the end-to-end `scripts/smoke_phase1.sh` (command → task →
+  streamed events → approval round-trip over a live WebSocket).
+- **Sandbox-verified (shell frontend):** the React app in `shell/` builds and
+  typechecks (`tsc --noEmit` + `vite build`) and runs in a plain browser via
+  `npm run dev` — activity timeline, streaming task cards, inline approval cards,
+  command bar, status strip, settings panel. Component tests pass under vitest.
+- **Needs-local-build:** the Tauri 2 desktop wrapper (`shell/src-tauri/`). Fully
+  scaffolded (single resizable window, 480px min, dark theme, capabilities,
+  global-shortcut stub) but `cargo`/Rust is not available in the sandbox, so
+  `npm run tauri build` must be run on a machine with the Rust toolchain. See
+  [`shell/README.md`](shell/README.md).
+- **Honest-unavailable:** voice endpoints (Phase 3); Letta semantic memory unless
+  `CENTRI_LETTA_URL` is configured. These report unavailable-with-reason rather than
+  faking success.
+- **Not here yet:** voice, memory synthesis worker (Phase 2), subscriptions, packaging.
 
 ## Configuration
 
