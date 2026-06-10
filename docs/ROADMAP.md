@@ -46,21 +46,32 @@ build sandbox).
   480px min, dark theme, capabilities, global-shortcut stub) but must be built
   locally with cargo — not verified in-sandbox.
 
-## Phase 2 — Memory v1 + briefing
+## Phase 2 — Memory v1 + briefing  ✅ implemented
+
+Status: backend **sandbox-verified** (74 backend pytest tests green; `centri-bench`
+runs native-vs-Letta with native at 1.00 composite, Letta at 0.93). Scoring uses a
+deterministic rubric (no model key in the sandbox) with an LLM-judge seam; see the
+honest accounting in the README.
 
 Design: [`memory-architecture.md`](memory-architecture.md). Benchmark:
 [`centri-bench.md`](centri-bench.md).
 
-- Memory synthesis worker ("sleep cycle"): fold event batches into typed
-  decision/fact/open-loop objects and core blocks continuously — typed objects
-  with receipts, never freeform prose; conflicts resolved by supersession.
-- Cue-driven injection: assemble relevant decisions, rejections, conventions, and
-  open alternatives into the hand brief at delegation/session-start/repo-open.
-- Proactive briefing ("what changed, what's blocked, what's next") plus dormancy
-  detection (one yes/no line per dormant loop, the only allowed spoonfeeding).
-- Prove re-derivability at scale via `rebuild_from_events()`.
-- Escape-hatch validation: `LettaMemoryStore` adapter run head-to-head against
-  CENTRI native in `centri-bench`.
+- ✅ Memory synthesis worker ("sleep cycle", `consolidation.py`): folds event hint
+  batches into typed decision/fact/open-loop objects with receipts
+  (`source_event_id`), never freeform prose; conflicts resolved by supersession; the
+  scheduler drives it on a high-water mark each tick.
+- ✅ Typed memory graph (`memory_graph.py`) on SQLite: bi-temporal supersession (new
+  truth sets `superseded_by`/`invalidated_at`, history retained, live view current
+  only); never confabulates (`OUTCOME_UNKNOWN`).
+- ✅ Cue-driven injection (`memory_brief.py`): assembles relevant decisions,
+  rejections, conventions, and open alternatives into the hand brief via
+  `build_delegation_brief()` at delegation/session-start/repo-open.
+- ✅ Proactive briefing ("what changed, what's blocked, what's next", `GET /briefing`)
+  plus dormancy detection (one yes/no line per dormant loop, surfaced once).
+- ✅ Re-derivability via `rebuild_from_events()` (the bench native backend rebuilds
+  the whole graph from the ledger before assembling each brief).
+- ✅ Escape-hatch validation: `LettaMemoryStore` adapter run head-to-head against
+  CENTRI native in `centri-bench` (`python -m centri.bench.run`).
 
 **Anti-gaming rule:** `centri-bench` tasks are written *before* Phase 2
 implementation starts — `docs/centri-bench.md` is that commitment, so the
