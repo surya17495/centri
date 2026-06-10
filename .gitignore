@@ -36,3 +36,4 @@ src-tauri/target/
 .idea/
 .vscode/
 *.swp
+.ruff_cache/
