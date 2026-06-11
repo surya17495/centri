@@ -81,6 +81,17 @@ def stream_updates(session_id):
             "content": {"type": "text", "text": " Done."},
         },
     })
+    if os.environ.get("ACP_FAKE_LONG"):
+        # A deliberately long chunk (>240 chars) so tests can prove the
+        # transcript event keeps full text while UI summaries stay truncated.
+        notify("session/update", {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "messageId": "m_long",
+                "content": {"type": "text", "text": " " + ("Detailed transcript sentence with specifics. " * 12).strip()},
+            },
+        })
 
 
 def main():

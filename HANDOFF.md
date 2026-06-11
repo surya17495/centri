@@ -24,11 +24,14 @@ right context before I have to ask." One memory across all clients
 
 ## Work queue (do in order; each is one commit+push)
 
-- [ ] **3b.1 Full hand transcripts** — `core/src/centri/hands/acp.py` truncates
-      agent text to 240 chars into `task.progress`. Add `hand.transcript`
-      events with full coalesced text (keep short summaries for UI); make
-      consolidation (`consolidation.py`) consume transcripts as hints; tests in
-      `core/tests/test_acp_hand.py` pattern (fake ACP agent over stdio).
+- [x] **3b.1 Full hand transcripts** — DONE. Both hands now record a
+      `hand.transcript` event (full untruncated text; ACP also traces tool
+      calls, OpenCode keeps stderr) plus a deterministic `fact` hint
+      (`topic: delegated-session:<uid>`, tags `[hand, transcript, acp|opencode]`)
+      that consolidation folds into the graph with a receipt. UI summaries stay
+      240-char. Tests: `test_acp_hand.py::test_transcript_event_keeps_full_text`
+      (fake agent `ACP_FAKE_LONG=1`), `test_consolidation.py::TestTranscriptHints`,
+      `test_centri.py::TestHands` opencode transcript tests. pytest 108/108.
 - [ ] **3b.2 Threads** — wire `thread_id` end to end: POST `/utterance`
       accepts/creates it, `/events?thread_id=` filters, shell sidebar (list /
       new / switch, timeline scoped). Memory stays global. Keep vitest text
@@ -49,7 +52,8 @@ right context before I have to ask." One memory across all clients
 - **Done & pushed:** Phases 0–2 (event spine, ACP+OpenCode hands, memory graph
   w/ typed supersession, consolidation worker, cue-driven briefs, centri-bench
   native 1.00 vs Letta 0.93), shell UI v2 + glassmorphism, Phase 3a auth+deploy
-  (`6e4bb2c`). pytest 103/103, vitest 6/6, tsc/build clean.
+  (`6e4bb2c`), 3b.1 full hand transcripts. pytest 108/108, vitest 6/6,
+  tsc/build clean.
 - **Layout:** `core/` Python FastAPI (src/centri/: app.py, db.py, coordinator,
   consolidation, memory_graph, memory_brief, briefing, hands/, bench/);
   `shell/` React+TS+Tailwind (+ Tauri scaffold); `deploy/` VM bundle;

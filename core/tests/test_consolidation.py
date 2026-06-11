@@ -125,3 +125,38 @@ class TestRebuild:
         await worker.rebuild_from_events()
         facts2 = await graph.current_facts()
         assert len(facts2) == 1 and facts2[0].statement == "renamed to identity"
+
+
+class TestTranscriptHints:
+    """Phase 3b.1 — hand.transcript events carry deterministic fact hints."""
+
+    async def test_transcript_fact_hint_writes_fact(self, setup):
+        worker, graph, _ = setup
+        long_text = "Refactored the auth module into authsvc. " * 10
+        n = await worker.consume_events([
+            {"id": "ev-t1", "type": "hand.transcript", "payload": {
+                "session_uid": "sess-9",
+                "intent": "refactor auth",
+                "text": long_text,
+                "fact": {
+                    "topic": "delegated-session:sess-9",
+                    "statement": f"Delegated session for 'refactor auth' (completed/end_turn): {long_text[:400]}",
+                    "tags": ["hand", "transcript", "acp"],
+                },
+            }},
+        ])
+        assert n == 1
+        facts = await graph.current_facts()
+        match = [f for f in facts if f.topic == "delegated-session:sess-9"]
+        assert len(match) == 1
+        assert match[0].source_event_id == "ev-t1"  # receipt back to the spine
+        assert "refactor auth" in match[0].statement
+
+    async def test_transcript_without_hint_writes_nothing(self, setup):
+        worker, graph, _ = setup
+        n = await worker.consume_events([
+            {"id": "ev-t2", "type": "hand.transcript", "payload": {
+                "session_uid": "sess-10", "text": ""}},
+        ])
+        assert n == 0
+        assert await graph.current_facts() == []

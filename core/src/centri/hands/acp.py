@@ -255,6 +255,10 @@ class AcpHand(Hand):
         conn = AcpConnection(proc)
         collected: List[str] = []
         artifacts: List[Dict[str, Any]] = []
+        # Full-fidelity turn record (Phase 3b.1): agent text is kept untruncated
+        # and tool activity is traced so the spine retains the whole session,
+        # not the 240-char UI summaries.
+        tool_trace: List[Dict[str, Any]] = []
 
         async def _emit(event: Dict[str, Any]) -> None:
             if event_sink is not None:
@@ -272,9 +276,16 @@ class AcpHand(Hand):
                 text = (update.get("content") or {}).get("text", "")
                 if text:
                     collected.append(text)
+                    # UI gets a short live summary; the full text is preserved in
+                    # the hand.transcript event recorded at turn end.
                     await _emit({"type": "task.progress", "source": "hand", "summary": text[:240]})
             elif kind == "tool_call":
                 title = update.get("title", update.get("kind", "tool"))
+                tool_trace.append({
+                    "tool_call_id": update.get("toolCallId"),
+                    "title": title,
+                    "status": update.get("status", "pending"),
+                })
                 await _emit({
                     "type": "task.progress",
                     "source": "hand",
@@ -284,6 +295,10 @@ class AcpHand(Hand):
                 })
             elif kind == "tool_call_update":
                 status = update.get("status", "")
+                tool_trace.append({
+                    "tool_call_id": update.get("toolCallId"),
+                    "status": status,
+                })
                 await _emit({
                     "type": "hand.progress",
                     "source": "hand",
@@ -333,16 +348,39 @@ class AcpHand(Hand):
             })
             stop_reason = prompt_result.get("stopReason", "end_turn")
 
-            summary = "".join(collected).strip() or f"ACP turn finished ({stop_reason})."
+            full_text = "".join(collected).strip()
+            summary = full_text or f"ACP turn finished ({stop_reason})."
             status = "completed" if stop_reason in ("end_turn", "max_tokens") else (
                 "cancelled" if stop_reason == "cancelled" else "failed"
             )
+            # Phase 3b.1: persist the verbatim turn to the spine. The fact hint
+            # is a deterministic excerpt with a receipt (source_event_id), so
+            # consolidation gains awareness of delegated work without an LLM and
+            # without confabulating.
+            transcript_event: Dict[str, Any] = {
+                "type": "hand.transcript",
+                "source": "hand",
+                "session_uid": session_id,
+                "intent": request.user_intent or "",
+                "stop_reason": stop_reason,
+                "text": full_text,
+                "tool_trace": tool_trace,
+            }
+            if full_text:
+                transcript_event["fact"] = {
+                    "topic": f"delegated-session:{session_id or request.id}",
+                    "statement": (
+                        f"Delegated session for '{(request.user_intent or '')[:120]}' "
+                        f"({status}/{stop_reason}): {full_text[:400]}"
+                    ),
+                    "tags": ["hand", "transcript", "acp"],
+                }
             return HandoffResult(
                 status=status,
                 summary=summary[:2000],
                 session_uid=session_id or None,
                 artifacts=artifacts,
-                events_to_record=[{
+                events_to_record=[transcript_event, {
                     "type": "hand.completed",
                     "source": "hand",
                     "stop_reason": stop_reason,

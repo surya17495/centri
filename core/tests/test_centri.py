@@ -228,3 +228,37 @@ class TestHands:
         names = [c.name for c in caps]
         assert "coding.start_task" in names
         await db.close()
+
+    async def test_opencode_transcript_event_keeps_full_output(self):
+        """Phase 3b.1: _build_result records an untruncated hand.transcript."""
+        from centri.hands.opencode import OpenCodeHand
+        hand = OpenCodeHand(db=None)
+        long_out = "line of detailed agent output\n" * 200  # ~5800 chars > 3000 excerpt
+        result = hand._build_result(
+            code=0, out=long_out, err="warn: something", description="build the feature",
+            cwd="/tmp/proj", request_id="req-123",
+        )
+        transcripts = [e for e in result.events_to_record if e["type"] == "hand.transcript"]
+        assert len(transcripts) == 1
+        t = transcripts[0]
+        assert t["text"] == long_out.strip()           # full, beyond the 3000-char artifact excerpt
+        assert len(t["text"]) > 3000
+        assert t["intent"] == "build the feature"
+        assert t["stop_reason"] == "exit:0"
+        assert t["stderr"] == "warn: something"
+        fact = t["fact"]
+        assert fact["topic"] == "delegated-session:req-123"  # no session_uid in plain output
+        assert "build the feature" in fact["statement"]
+        assert fact["tags"] == ["hand", "transcript", "opencode"]
+        # The opencode.run event is still recorded alongside.
+        assert any(e["type"] == "opencode.run" for e in result.events_to_record)
+
+    async def test_opencode_transcript_empty_output_has_no_fact_hint(self):
+        from centri.hands.opencode import OpenCodeHand
+        hand = OpenCodeHand(db=None)
+        result = hand._build_result(
+            code=1, out="", err="boom", description="x", cwd=None, request_id="req-9",
+        )
+        t = [e for e in result.events_to_record if e["type"] == "hand.transcript"][0]
+        assert t["text"] == ""
+        assert "fact" not in t  # consolidation must never confabulate from nothing

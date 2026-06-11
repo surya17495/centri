@@ -264,12 +264,36 @@ class OpenCodeHand(Hand):
             else:
                 summary = f"Task failed (exit={code}): {err[:200] or out[:200]}"
 
+        status = "completed" if code == 0 else "failed"
+        # Phase 3b.1: persist the verbatim run output to the spine (artifacts
+        # keep short excerpts for the UI; the transcript event is untruncated).
+        full_text = out.strip()
+        transcript_event: Dict[str, Any] = {
+            "type": "hand.transcript",
+            "source": "hand",
+            "session_uid": session_uid,
+            "intent": description,
+            "stop_reason": f"exit:{code}",
+            "text": full_text,
+            "stderr": err.strip(),
+        }
+        if full_text:
+            transcript_event["fact"] = {
+                "topic": f"delegated-session:{session_uid or request_id}",
+                "statement": (
+                    f"Delegated session for '{description[:120]}' "
+                    f"({status}/exit:{code}): {full_text[:400]}"
+                ),
+                "tags": ["hand", "transcript", "opencode"],
+            }
+
         return HandoffResult(
-            status="completed" if code == 0 else "failed",
+            status=status,
             summary=summary,
             session_uid=session_uid,
             artifacts=artifacts,
             events_to_record=[
+                transcript_event,
                 {
                     "type": "opencode.run",
                     "description": description,
@@ -277,7 +301,7 @@ class OpenCodeHand(Hand):
                     "exit_code": code,
                     "request_id": request_id,
                     "session_uid": session_uid,
-                }
+                },
             ],
         )
 

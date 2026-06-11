@@ -116,3 +116,42 @@ async def test_cancel(tmp_path):
 
     result = await asyncio.wait_for(task, timeout=10.0)
     assert result.status == "cancelled"
+
+
+async def test_transcript_event_keeps_full_text(tmp_path, monkeypatch):
+    """Phase 3b.1: the spine receives the verbatim turn, not the 240-char UI cut."""
+    monkeypatch.setenv("ACP_FAKE_LONG", "1")
+    hand = AcpHand(command=_command("stream"))
+    events = []
+
+    async def sink(ev):
+        events.append(ev)
+
+    result = await hand.execute(_request(tmp_path), event_sink=sink)
+    assert result.status == "completed"
+
+    transcripts = [e for e in result.events_to_record if e["type"] == "hand.transcript"]
+    assert len(transcripts) == 1
+    t = transcripts[0]
+    # Full text is untruncated (>240 chars) and contains both ends of the turn.
+    assert len(t["text"]) > 240
+    assert "Working on it." in t["text"]
+    assert "Detailed transcript sentence" in t["text"]
+    assert t["session_uid"] == "sess-fake-1"
+    assert t["stop_reason"] == "end_turn"
+    # Tool activity was traced (call + completion update).
+    ids = [c.get("tool_call_id") for c in t["tool_trace"]]
+    assert "call_1" in ids
+    statuses = [c.get("status") for c in t["tool_trace"]]
+    assert "completed" in statuses
+    # Deterministic fact hint so consolidation learns about delegated work.
+    fact = t["fact"]
+    assert fact["topic"] == "delegated-session:sess-fake-1"
+    assert "do the thing" in fact["statement"]
+    assert fact["tags"] == ["hand", "transcript", "acp"]
+    # Live UI summaries stay short; the transcript precedes hand.completed.
+    for ev in events:
+        if ev["type"] == "task.progress" and "summary" in ev:
+            assert len(ev["summary"]) <= 240
+    types = [e["type"] for e in result.events_to_record]
+    assert types.index("hand.transcript") < types.index("hand.completed")
