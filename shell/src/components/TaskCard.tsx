@@ -16,9 +16,9 @@ export function TaskCard({ card }: { card: TaskCardData }) {
     typeof latest?.percent === "number" ? Math.min(100, latest.percent) : null;
 
   return (
-    <div className="overflow-hidden rounded-xl border border-line bg-surface-1 shadow-card">
+    <div className="glass overflow-hidden rounded-xl">
       {card.status === "running" && (
-        <div className="h-0.5 w-full bg-surface-2">
+        <div className="h-0.5 w-full bg-white/[0.06]">
           <div
             className={`h-full ${meta.bar ?? "bg-accent"} transition-all duration-500`}
             style={{ width: `${percent ?? 100}%` }}
@@ -78,9 +78,9 @@ export function TaskCard({ card }: { card: TaskCardData }) {
             {card.artifacts.map((a, i) => (
               <div
                 key={i}
-                className="flex items-center gap-2 rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-xs"
+                className="flex items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-xs"
               >
-                <span className="rounded bg-surface-3 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-ink-dim">
+                <span className="rounded bg-white/[0.07] px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-ink-dim">
                   {a.type}
                 </span>
                 <span className="truncate text-ink">{a.title}</span>

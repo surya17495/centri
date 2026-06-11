@@ -27,7 +27,7 @@ export function ApprovalCard({
   }
 
   return (
-    <div className="relative overflow-hidden rounded-xl border border-line bg-surface-1 p-4 shadow-card">
+    <div className="glass relative overflow-hidden rounded-xl p-4">
       <span className={`absolute inset-y-0 left-0 w-0.5 ${meta.edge}`} aria-hidden />
       <div className="flex items-center gap-2.5">
         <span
@@ -70,7 +70,7 @@ export function ApprovalCard({
           <button
             disabled={busy}
             onClick={() => act("reject")}
-            className="rounded-lg border border-line bg-transparent px-3.5 py-1.5 text-xs font-medium text-ink-dim transition-colors hover:border-line-strong hover:text-ink disabled:opacity-50"
+            className="glass-chip rounded-lg px-3.5 py-1.5 text-xs font-medium text-ink-dim transition-colors hover:bg-white/[0.08] hover:text-ink disabled:opacity-50"
           >
             Reject
           </button>

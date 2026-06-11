@@ -11,7 +11,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 }
 
 const FIELD =
-  "rounded-lg border border-line bg-surface-0 px-2.5 py-1.5 text-xs text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none transition-colors";
+  "rounded-lg border border-white/[0.09] bg-black/30 px-2.5 py-1.5 text-xs text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none transition-colors";
 const PRIMARY_BTN =
   "rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover";
 
@@ -53,7 +53,7 @@ export function SettingsPanel({
       onClick={onClose}
     >
       <div
-        className="scrollbar-thin h-full w-full max-w-sm overflow-y-auto border-l border-line bg-surface-1 p-6 shadow-drawer animate-slide-in-right"
+        className="glass-deep scrollbar-thin h-full w-full max-w-sm overflow-y-auto !rounded-none border-y-0 border-r-0 p-6 animate-slide-in-right"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
@@ -61,7 +61,7 @@ export function SettingsPanel({
           <button
             onClick={onClose}
             aria-label="Close settings"
-            className="rounded-lg p-1.5 text-ink-dim transition-colors hover:bg-surface-2 hover:text-ink"
+            className="rounded-lg p-1.5 text-ink-dim transition-colors hover:bg-white/[0.06] hover:text-ink"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" />
@@ -116,7 +116,7 @@ export function SettingsPanel({
 
         <section className="mt-7">
           <SectionTitle>Hands</SectionTitle>
-          <div className="mt-2.5 divide-y divide-line rounded-xl border border-line bg-surface-0/60">
+          <div className="mt-2.5 divide-y divide-line rounded-xl border border-white/[0.08] bg-white/[0.03]">
             {(status?.hands ?? []).map((h) => (
               <div
                 key={`${h.name}::${h.detail}`}
@@ -149,7 +149,7 @@ export function SettingsPanel({
 
         <section className="mt-7">
           <SectionTitle>Model roles</SectionTitle>
-          <div className="mt-2.5 divide-y divide-line rounded-xl border border-line bg-surface-0/60">
+          <div className="mt-2.5 divide-y divide-line rounded-xl border border-white/[0.08] bg-white/[0.03]">
             {Object.entries(status?.role_models ?? {}).map(([role, info]) => (
               <div key={role} className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
                 <span className="shrink-0 text-ink-dim">{role}</span>

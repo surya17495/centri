@@ -56,7 +56,7 @@ export function CommandBar() {
             {error}
           </div>
         )}
-        <div className="flex items-center gap-2 rounded-2xl bg-surface-1 px-4 py-3 shadow-composer transition-shadow focus-within:shadow-[0_0_0_1px_rgba(124,124,244,0.5),0_8px_24px_rgba(0,0,0,0.45)]">
+        <div className="glass-deep flex items-center gap-2 rounded-2xl px-4 py-3 transition-shadow focus-within:shadow-[inset_0_1px_0_rgba(255,255,255,0.09),0_0_0_1px_rgba(124,124,244,0.55),0_16px_48px_rgba(0,0,0,0.5)]">
           <input
             ref={inputRef}
             value={text}
@@ -67,7 +67,7 @@ export function CommandBar() {
             aria-label="Command input"
             className="flex-1 bg-transparent text-sm text-ink placeholder:text-ink-faint focus:outline-none disabled:opacity-60"
           />
-          <kbd className="hidden rounded border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-ink-faint sm:block">
+          <kbd className="glass-chip hidden rounded px-1.5 py-0.5 font-mono text-[10px] text-ink-faint sm:block">
             ↵
           </kbd>
           <button

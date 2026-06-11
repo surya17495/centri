@@ -31,7 +31,7 @@ function RawEvent({ item }: { item: Extract<TimelineItem, { kind: "event" }> }) 
 function UserMessage({ text }: { text: string }) {
   return (
     <div className="flex justify-end">
-      <div className="max-w-[85%] rounded-2xl rounded-br-md border border-line bg-surface-2 px-4 py-2.5 text-sm leading-relaxed text-ink shadow-card">
+      <div className="max-w-[85%] rounded-2xl rounded-br-md border border-accent/25 bg-accent/[0.13] px-4 py-2.5 text-sm leading-relaxed text-ink shadow-[inset_0_1px_0_rgba(255,255,255,0.07),0_4px_16px_rgba(0,0,0,0.25)] backdrop-blur-md">
         {text}
       </div>
     </div>
@@ -77,7 +77,7 @@ function EmptyState() {
           <button
             key={s}
             onClick={() => prefill(s)}
-            className="rounded-full border border-line bg-surface-1 px-3.5 py-1.5 text-[12px] text-ink-dim transition-colors hover:border-line-strong hover:bg-surface-2 hover:text-ink"
+            className="glass-chip rounded-full px-3.5 py-1.5 text-[12px] text-ink-dim transition-colors hover:bg-white/[0.08] hover:text-ink"
           >
             {s}
           </button>
