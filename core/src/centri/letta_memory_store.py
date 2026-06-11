@@ -50,17 +50,52 @@ class LettaMemoryStore(MemoryStore):
     def __init__(self, db: Any, letta_client: Any = None):
         self._db = db
         settings = get_settings()
+        self._settings = settings
         self._base = (settings.letta_url or "").rstrip("/")
         self._api_key = settings.letta_api_key or ""
         self._agent_id = settings.letta_agent_id
+        # ``letta_client`` is the injectable HTTP transport (LettaHTTPClient or a
+        # test double). When a Letta server is configured but no client was
+        # passed, build a real one lazily so production wiring needs no glue.
         self._client = letta_client
+        if self._client is None and self._base:
+            self._client = self._build_http_client()
         self._ready = False
+        self._http_agent_ready = False
+
+    def _build_http_client(self) -> Any:
+        try:
+            from centri.letta_http import LettaHTTPClient
+        except Exception:  # pragma: no cover - import guard
+            return None
+        try:
+            return LettaHTTPClient(
+                base_url=self._base,
+                api_key=self._api_key,
+                model=self._settings.letta_model,
+                model_endpoint=self._settings.letta_model_endpoint,
+                embedding_model=self._settings.letta_embedding_model,
+                embedding_endpoint=self._settings.letta_embedding_endpoint,
+                embedding_dim=self._settings.letta_embedding_dim,
+            )
+        except Exception as exc:  # pragma: no cover - SDK missing/misconfigured
+            logger.warning("Letta HTTP client unavailable, using local projection: %s", exc)
+            return None
 
     def available(self) -> bool:
-        return bool(self._client or (self._base and httpx is not None))
+        return self._client is not None
 
     def mode(self) -> str:
         return "letta_http" if self.available() else "local_projection"
+
+    async def _ensure_http_agent(self) -> None:
+        """Create the remote bench agent once per ingest (HTTP mode only)."""
+        if self._http_agent_ready or self._client is None:
+            return
+        import asyncio
+
+        await asyncio.to_thread(self._client.ensure_agent)
+        self._http_agent_ready = True
 
     async def _ensure(self) -> None:
         if self._ready:
@@ -100,6 +135,12 @@ class LettaMemoryStore(MemoryStore):
 
     # -- archival -----------------------------------------------------------
     async def insert_fact(self, fact: ArchivalFact) -> None:
+        if self._client is not None:
+            import asyncio
+
+            await self._ensure_http_agent()
+            await asyncio.to_thread(self._client.insert_passage, fact.text, fact.tags)
+            return
         await self._ensure()
         await self._db._execute(
             "INSERT OR REPLACE INTO letta_archival (id, text, source_event_id, tags, created_at) VALUES (?,?,?,?,?)",
@@ -107,10 +148,21 @@ class LettaMemoryStore(MemoryStore):
         )
 
     async def search_facts(self, query: str, limit: int = 10) -> List[ArchivalFact]:
+        if self._client is not None:
+            import asyncio
+
+            await self._ensure_http_agent()
+            rows = await asyncio.to_thread(self._client.search_passages, query, limit)
+            # Real Letta archival is semantic prose retrieval with no typed
+            # supersession — superseded and current passages both come back,
+            # exactly the accumulation failure the bench surfaces.
+            return [
+                ArchivalFact(id=pid or f"passage-{i}", text=text, source_event_id=None, tags=[])
+                for i, (text, pid) in enumerate(rows)
+            ]
         await self._ensure()
-        # Letta's archival is prose retrieval: substring/lexical match, no typed
-        # supersession — so superseded and current facts both come back, which is
-        # exactly the failure mode the bench surfaces.
+        # Local-projection fallback: substring/lexical match, also no typed
+        # supersession — the honest storage-layer model of Letta's archival.
         terms = [t for t in query.lower().split() if len(t) > 2][:4]
         like = "%" + "%".join(terms) + "%" if terms else "%"
         cur = await self._db._execute(
@@ -179,9 +231,18 @@ class LettaMemoryStore(MemoryStore):
         return ""
 
     async def rebuild_from_events(self) -> int:
-        await self._ensure()
-        await self._db._execute("DELETE FROM letta_archival")
-        await self._db._execute("DELETE FROM letta_blocks")
+        if self._client is not None:
+            import asyncio
+
+            # Re-derivation in HTTP mode means a fresh agent: drop the old one so
+            # archival passages start clean, then re-create on first insert.
+            await asyncio.to_thread(self._client.reset)
+            self._http_agent_ready = False
+            await self._ensure_http_agent()
+        else:
+            await self._ensure()
+            await self._db._execute("DELETE FROM letta_archival")
+            await self._db._execute("DELETE FROM letta_blocks")
         rows = await self._db.recent_events(limit=1_000_000)
         events: List[Dict[str, Any]] = []
         for row in rows:

@@ -45,6 +45,12 @@ class Settings:
     letta_url: str = ""
     letta_api_key: str = ""
     letta_agent_id: str = "centri-main"
+    # Models a real Letta server uses for its agent (OpenAI-compatible endpoints).
+    letta_model: str = "moonshotai/Kimi-K2.6"
+    letta_model_endpoint: str = "http://127.0.0.1:8901/v1"
+    letta_embedding_model: str = "Qwen/Qwen3-Embedding-8B"
+    letta_embedding_endpoint: str = "http://127.0.0.1:8901/v1"
+    letta_embedding_dim: int = 4096
 
     # OpenCode hand (CLI-based, no sidecar needed)
     opencode_cli: str = "opencode"
@@ -97,6 +103,11 @@ class Settings:
             letta_url=os.getenv("CENTRI_LETTA_URL", ""),
             letta_api_key=os.getenv("CENTRI_LETTA_API_KEY", ""),
             letta_agent_id=os.getenv("CENTRI_LETTA_AGENT_ID", "centri-main"),
+            letta_model=os.getenv("CENTRI_LETTA_MODEL", "moonshotai/Kimi-K2.6"),
+            letta_model_endpoint=os.getenv("CENTRI_LETTA_MODEL_ENDPOINT", "http://127.0.0.1:8901/v1"),
+            letta_embedding_model=os.getenv("CENTRI_LETTA_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-8B"),
+            letta_embedding_endpoint=os.getenv("CENTRI_LETTA_EMBEDDING_ENDPOINT", "http://127.0.0.1:8901/v1"),
+            letta_embedding_dim=int(os.getenv("CENTRI_LETTA_EMBEDDING_DIM", "4096")),
             opencode_cli=os.getenv("OPENCODE_CLI", "opencode"),
             acp_command=os.getenv("CENTRI_ACP_COMMAND", ""),
             acp_opencode_command=os.getenv("CENTRI_ACP_OPENCODE_COMMAND", "opencode acp"),
