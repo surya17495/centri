@@ -130,7 +130,8 @@ What that decomposes into, and the phase that closes each piece:
 | --- | --- |
 | Hands record summaries, not full transcripts | 3b.1 |
 | One global timeline; no chat separation (`thread_id` unused) | 3b.2 |
-| Work done outside CENTRI (Cursor/OpenCode-direct) invisible | 3b.3 |
+| Work done outside CENTRI (Cursor/OpenCode-direct) invisible | 3b.3, 3b.4 |
+| A fresh install starts with empty memory (no prior history) | 3b.4 |
 | Open loops tracked but never proactively closed | 3d.1 |
 | Flat consolidation won't hold precision at 10^6 events | 3c |
 | Memory quality unmeasured between releases | 3e |
@@ -169,7 +170,32 @@ with tests and its own commit.
   incremental sync (high-water mark per source), then consolidation digests
   them like native events. Acceptance: point at a fixture opencode.db, events
   appear once (re-run = no dupes), facts from an ingested session surface in a
-  brief.
+  brief. **Done (2026-06-11).** See `HANDOFF.md`.
+- **3b.4 Memory bootstrap.** A fresh install should discover and import the
+  user's *existing* coding-agent histories so memory is complete from day one —
+  not just from the moment CENTRI was installed. **Inserted ahead of 3d.1**
+  (ratified 2026-06-11): the value of proactivity (3d) depends on memory already
+  being populated, so seeding it comes first. Rationale that makes this cheap:
+  since ingestion is high-water-mark based, **a one-time import and the
+  continuous tail are the same code path** — *bootstrap = first tick* (the only
+  difference is the HWM starts empty). Generalize 3b.3's lone ingestor into an
+  **adapter registry**: per-agent adapters (OpenCode, Claude Code, Cursor) that
+  share the existing HWM / idempotency / redaction / write core, so a new agent
+  is a reader plus labels, not a pipeline. Add **discovery** (probe well-known
+  default paths per platform; honest-unavailable when nothing is found) exposed
+  at `GET /ingest/discover` so a client can say "found 1,400 OpenCode messages,
+  600 Claude Code sessions — import?" before committing; and **bootstrap** at
+  `POST /ingest/bootstrap` that runs a full import across discovered (or
+  configured) sources, emitting `ingest.bootstrap.*` progress events on the spine
+  so the shell timeline shows it. New adapters are read-only + schema-tolerant
+  like 3b.3 (degrade honestly — skip with a logged reason — when tables/files are
+  missing). Claude Code = session JSONL under `~/.claude`; Cursor = local
+  `state.vscdb` KV chat tables. Per-agent path overrides / disables via config.
+  Acceptance: fixture stores for each agent import once (re-run = no dupes),
+  per-source HWM, redaction applied, discovery returns counts, bootstrap is
+  idempotent and emits progress. **Done (2026-06-11).** Real Claude Code/Cursor
+  data verification remains on the real-machine list (fixture-verified only). See
+  `HANDOFF.md`.
 
 ## Phase 3c — Retrieval at scale
 

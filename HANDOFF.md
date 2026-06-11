@@ -83,6 +83,39 @@ Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
       HWM, redaction, brief-surfacing, schema tolerance, missing-db, helper) +
       `test_centri.py::TestIngest` (2: endpoint idempotent, requires path).
       pytest 125/125.
+- [x] **3b.4 Memory bootstrap** — DONE (2026-06-11). **Inserted ahead of 3d.1**
+      by the owner: a fresh install should discover and import the user's existing
+      coding-agent histories so memory is complete from day one. Key insight —
+      since ingestion is HWM-based, one-time import and continuous tail are the
+      *same code path*: **bootstrap = first tick** (HWM just starts empty).
+      Generalized 3b.3's lone ingestor into an **adapter registry**
+      (`centri.ingest.base.MessageAdapter` shared HWM/idempotency/redaction/write
+      core + `centri.ingest.registry.IngestRegistry`). `OpenCodeIngestor` is now
+      the first adapter in the registry; its 13 tests and `/ingest/opencode`
+      config/endpoint contract are unchanged (`runtime.opencode_ingestor` still
+      points at the OpenCode adapter). Two new adapters, read-only +
+      schema-tolerant like 3b.3: **Claude Code** (`ClaudeCodeIngestor` — tails
+      session JSONL under `~/.claude/projects`, `ingest.claude_code.message`) and
+      **Cursor** (`CursorIngestor` — harvests chat from `state.vscdb` KV tables
+      `ItemTable`/`cursorDiskKV`, `ingest.cursor.message`; degrades honestly when
+      no KV/chat table). Assistant/tool turns carry fact hints (folded by
+      consolidation); user prompts captured but not folded. **Discovery**
+      (`GET /ingest/discover`) probes well-known default paths per platform
+      (macOS/Linux) with cheap counts, honest-unavailable when absent.
+      **Bootstrap** (`POST /ingest/bootstrap`) discovers + runs a full import
+      across all sources, emitting `ingest.bootstrap.{started,progress,completed}`
+      events on the spine (importance `normal`) so the shell timeline shows it; an
+      explicit `sources` list is also accepted. Config overrides:
+      `CENTRI_INGEST_{OPENCODE,CLAUDE_CODE,CURSOR}_PATHS` (extra probe paths) and
+      `CENTRI_INGEST_DISABLED_AGENTS` (opt-out). Tests:
+      `test_ingest_claude_code.py` (8), `test_ingest_cursor.py` (9),
+      `test_ingest_registry.py` (6: discovery counts, disabled-agent, honest
+      unavailable, bootstrap import + progress events, idempotent, explicit
+      sources), `test_centri.py::TestBootstrap` (2: discover shape, bootstrap
+      endpoint idempotent). **Honesty:** all new adapters are *fixture-verified
+      only* — real Claude Code / Cursor on-disk data verification stays on the
+      real-machine list (their schemas vary across releases; the readers are built
+      tolerant but only proven against fixtures). pytest 150/150.
 - [ ] **3d.1 Open-loop scheduler** — scheduler tick scans open loops, emits
       one-time `loop.nudge` events per policy window; surfaces in `/briefing`.
 - [ ] **3c.1 Tiered consolidation** — daily/weekly digests + entity pages;
@@ -97,13 +130,15 @@ Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
   w/ typed supersession, consolidation worker, cue-driven briefs, centri-bench
   native 1.00 vs Letta 0.93), shell UI v2 + glassmorphism, Phase 3a auth+deploy
   (`6e4bb2c`), 3b.1 full hand transcripts, 3b.2 threads (chat-scoped timeline,
-  global memory), 3b.3 OpenCode ingestion adapter. Decisions ratified
-  (shared-core continuity, OpenCode-via-ACP default, deterministic memory) —
-  see `docs/ROADMAP.md` → "Decisions". pytest 125/125, vitest 9/9,
-  tsc/build clean.
+  global memory), 3b.3 OpenCode ingestion adapter, 3b.4 memory bootstrap
+  (ingest adapter registry + Claude Code/Cursor adapters + discovery +
+  one-shot import). Decisions ratified (shared-core continuity, OpenCode-via-ACP
+  default, deterministic memory) — see `docs/ROADMAP.md` → "Decisions".
+  pytest 150/150, vitest 9/9, tsc/build clean.
 - **Next:** 3d.1 open-loop scheduler (per the work queue order below).
 - **Layout:** `core/` Python FastAPI (src/centri/: app.py, db.py, coordinator,
-  consolidation, memory_graph, memory_brief, briefing, hands/, ingest/, bench/);
+  consolidation, memory_graph, memory_brief, briefing, hands/, ingest/ [base +
+  registry + opencode/claude_code/cursor adapters], bench/);
   `shell/` React+TS+Tailwind (+ Tauri scaffold); `deploy/` VM bundle;
   `docs/` architecture/roadmap/memory/bench/event-contract.
 - **Run locally (sandbox):** backend

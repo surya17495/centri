@@ -35,6 +35,7 @@ class Runtime:
         self.memory_graph: Any = None
         self.consolidator: Any = None
         self.opencode_ingestor: Any = None
+        self.ingest_registry: Any = None
         self.memory_brief: Any = None
         self.proactive_brief: Any = None
         self._background_tasks: list[asyncio.Task] = []
@@ -58,7 +59,7 @@ class Runtime:
         from centri.event_bus import EventBus
         from centri.memory_graph import MemoryGraph
         from centri.consolidation import Consolidator
-        from centri.ingest import OpenCodeIngestor
+        from centri.ingest import IngestConfig, IngestRegistry
         from centri.memory_brief import MemoryBriefAssembler, ProactiveBriefBuilder
 
         settings = get_settings()
@@ -90,7 +91,15 @@ class Runtime:
         self.memory_graph = MemoryGraph(self.db)
         await self.memory_graph.ensure_tables()
         self.consolidator = Consolidator(self.db, self.memory_graph, event_bus=self.event_bus)
-        self.opencode_ingestor = OpenCodeIngestor(self.db, event_bus=self.event_bus)
+        # Ingestion adapter registry (3b.4): OpenCode + Claude Code + Cursor share
+        # one HWM/idempotency/redaction core. opencode_ingestor stays the OpenCode
+        # adapter so the 3b.3 endpoint + scheduler contract is unchanged.
+        self.ingest_registry = IngestRegistry(
+            self.db,
+            event_bus=self.event_bus,
+            config=IngestConfig.from_settings(settings),
+        )
+        self.opencode_ingestor = self.ingest_registry.opencode
         self.memory_brief = MemoryBriefAssembler(self.memory_graph)
         self.proactive_brief = ProactiveBriefBuilder(self.db, self.memory_graph)
 

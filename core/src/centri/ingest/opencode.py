@@ -1,4 +1,4 @@
-"""CENTRI OpenCode ingestion adapter (ROADMAP 3b.3).
+"""CENTRI OpenCode ingestion adapter (ROADMAP 3b.3, registry form in 3b.4).
 
 Tails an external ``opencode.db`` — the SQLite store OpenCode keeps for its own
 sessions/messages — into ``ingest.opencode.message`` spine events. This makes
@@ -6,6 +6,10 @@ coding work a developer did *directly* in OpenCode (outside CENTRI's hand path)
 visible to the memory graph: each ingested message becomes an event, and the
 consolidation worker folds the per-session digest into a typed fact exactly as
 it does for native ``hand.transcript`` events.
+
+The shared HWM/idempotency/redaction/write core now lives in
+:mod:`centri.ingest.base`; this module is just the OpenCode-specific reader plus
+its labels. Behavior is unchanged from 3b.3.
 
 The read path is **read-only** (the external DB is opened ``mode=ro``) and
 **idempotent**: event ids are deterministic and the high-water mark is persisted
@@ -28,18 +32,21 @@ the last ingested row, so ordering is stable even when timestamps collide.
 
 from __future__ import annotations
 
-import json
 import logging
 import sqlite3
-from datetime import datetime, timezone
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from centri.ingest.base import (
+    DiscoveredSource,
+    MessageAdapter,
+    coerce_ts,
+    first_present,
+    flatten_content,
+)
+
 logger = logging.getLogger(__name__)
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 # Candidate column names, most-specific first. The reader picks the first one
@@ -51,137 +58,47 @@ _CONTENT_COLS = ("content", "text", "body", "message", "parts")
 _TS_COLS = ("created_at", "createdAt", "created", "time_created", "time", "ts", "timestamp")
 _MESSAGE_TABLES = ("message", "messages", "Message")
 
-_SUMMARY_CHARS = 240
-_FACT_STATEMENT_CHARS = 400
+
+def _opencode_default_locations() -> List[Path]:
+    """Well-known default opencode.db locations per platform (macOS/Linux)."""
+    home = Path.home()
+    paths: List[Path] = []
+    # XDG / Linux + macOS share state dir conventions across opencode versions.
+    paths.append(home / ".local" / "share" / "opencode" / "opencode.db")
+    paths.append(home / ".config" / "opencode" / "opencode.db")
+    paths.append(home / ".opencode" / "opencode.db")
+    if sys.platform == "darwin":
+        paths.append(home / "Library" / "Application Support" / "opencode" / "opencode.db")
+    return paths
 
 
-def _first_present(available: List[str], candidates: Tuple[str, ...]) -> Optional[str]:
-    lower = {c.lower(): c for c in available}
-    for cand in candidates:
-        if cand.lower() in lower:
-            return lower[cand.lower()]
-    return None
-
-
-def _coerce_ts(value: Any) -> str:
-    """Normalize a row timestamp to an ISO-8601 string for stable ordering.
-
-    OpenCode has stored timestamps as ISO strings and as epoch ms/seconds; both
-    are accepted. Unparseable values sort lexicographically as-is.
-    """
-    if value is None:
-        return ""
-    if isinstance(value, (int, float)):
-        # Heuristic: ms vs seconds. 1e12 ~ 2001 in ms / year 33658 in seconds.
-        seconds = value / 1000.0 if value > 1_000_000_000_000 else float(value)
-        try:
-            return datetime.fromtimestamp(seconds, tz=timezone.utc).isoformat()
-        except (ValueError, OverflowError, OSError):
-            return str(value)
-    return str(value)
-
-
-def _flatten_content(raw: Any) -> str:
-    """Turn a message content cell into plain text.
-
-    Plain strings pass through. OpenCode sometimes stores a JSON array of
-    "parts" ({"type": "text", "text": ...}); those are flattened to their text.
-    """
-    if raw is None:
-        return ""
-    if isinstance(raw, (int, float)):
-        return str(raw)
-    if isinstance(raw, str):
-        stripped = raw.strip()
-        if stripped.startswith("[") or stripped.startswith("{"):
-            try:
-                parsed = json.loads(stripped)
-                return _flatten_content(parsed)
-            except (ValueError, TypeError):
-                return raw
-        return raw
-    if isinstance(raw, list):
-        parts: List[str] = []
-        for item in raw:
-            if isinstance(item, dict):
-                text = item.get("text") or item.get("content") or item.get("value")
-                if text:
-                    parts.append(str(text))
-            elif item:
-                parts.append(str(item))
-        return "\n".join(parts)
-    if isinstance(raw, dict):
-        text = raw.get("text") or raw.get("content") or raw.get("value")
-        return str(text) if text else ""
-    return str(raw)
-
-
-class OpenCodeIngestor:
+class OpenCodeIngestor(MessageAdapter):
     """Incremental, idempotent tail of an ``opencode.db`` into spine events."""
 
-    def __init__(self, db: Any, event_bus: Any = None):
-        self._db = db
-        self._event_bus = event_bus
+    agent = "opencode"
+    tool = "opencode"
+    event_type = "ingest.opencode.message"
+    event_source = "ingest.opencode"
+    source_prefix = "opencode"
+    fact_tags = ("ingest", "opencode", "transcript")
 
-    async def ingest(
-        self,
-        opencode_db_path: str | Path,
-        source: Optional[str] = None,
-        repo_id: Optional[str] = None,
-        limit: int = 5000,
-    ) -> Dict[str, Any]:
-        """Read new messages from ``opencode_db_path`` and append spine events.
+    def default_locations(self) -> List[Path]:
+        return _opencode_default_locations()
 
-        ``source`` keys the high-water mark; it defaults to the absolute db path
-        so distinct stores tail independently. Returns a summary dict
-        ``{source, ingested, high_water, scanned}``. Idempotent: a second call
-        with no new rows ingests nothing.
-        """
-        path = Path(opencode_db_path)
-        src = source or f"opencode:{path.resolve()}"
-        if not path.exists():
-            logger.info("OpenCode ingest: db not found at %s (source=%s)", path, src)
-            return {"source": src, "ingested": 0, "high_water": "", "scanned": 0, "available": False}
+    def fact_topic(self, row: Dict[str, Any]) -> str:
+        session_id = row.get("session_id") or row.get("id")
+        return f"opencode-session:{session_id}"
 
-        high_water = await self._db.get_ingest_high_water(src)
-        try:
-            rows = self._read_messages(path)
-        except Exception as exc:
-            logger.warning("OpenCode ingest read failed for %s: %s", path, exc)
-            return {"source": src, "ingested": 0, "high_water": high_water, "scanned": 0, "available": False, "error": str(exc)}
-
-        # Sort by (ts, id) so the cursor is total-order stable across collisions.
-        rows.sort(key=lambda r: (r["ts"], str(r["id"])))
-        scanned = len(rows)
-
-        ingested = 0
-        newest_cursor = high_water
-        for row in rows:
-            cursor = f"{row['ts']}|{row['id']}"
-            if high_water and cursor <= high_water:
-                continue
-            wrote = await self._append_message_event(src, row, repo_id)
-            if wrote:
-                ingested += 1
-            if cursor > newest_cursor:
-                newest_cursor = cursor
-
-        if ingested or newest_cursor != high_water:
-            await self._db.set_ingest_high_water(
-                src, newest_cursor, last_run_at=_now(), ingested_delta=ingested
-            )
-        return {
-            "source": src,
-            "ingested": ingested,
-            "high_water": newest_cursor,
-            "scanned": scanned,
-            "available": True,
-        }
+    def fact_statement(self, row: Dict[str, Any]) -> str:
+        session_id = row.get("session_id") or row.get("id")
+        role = row.get("role") or "unknown"
+        content = (row.get("content") or "").strip()
+        return f"OpenCode session {session_id} ({role}): {content[:400]}"
 
     # ------------------------------------------------------------------
     # External DB read (read-only)
     # ------------------------------------------------------------------
-    def _read_messages(self, path: Path) -> List[Dict[str, Any]]:
+    def read_messages(self, path: Path) -> List[Dict[str, Any]]:
         uri = f"file:{path.resolve()}?mode=ro"
         conn = sqlite3.connect(uri, uri=True)
         try:
@@ -190,11 +107,11 @@ class OpenCodeIngestor:
             if table is None:
                 raise ValueError("no message table found in opencode.db")
             cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
-            id_col = _first_present(cols, _ID_COLS)
-            session_col = _first_present(cols, _SESSION_COLS)
-            role_col = _first_present(cols, _ROLE_COLS)
-            content_col = _first_present(cols, _CONTENT_COLS)
-            ts_col = _first_present(cols, _TS_COLS)
+            id_col = first_present(cols, _ID_COLS)
+            session_col = first_present(cols, _SESSION_COLS)
+            role_col = first_present(cols, _ROLE_COLS)
+            content_col = first_present(cols, _CONTENT_COLS)
+            ts_col = first_present(cols, _TS_COLS)
 
             # rowid is always available as the id fallback for tables whose
             # primary id column is absent or null.
@@ -210,8 +127,8 @@ class OpenCodeIngestor:
                         "id": str(rid),
                         "session_id": str(rd.get(session_col)) if session_col and rd.get(session_col) is not None else "",
                         "role": str(rd.get(role_col)) if role_col and rd.get(role_col) is not None else "",
-                        "content": _flatten_content(rd.get(content_col)) if content_col else "",
-                        "ts": _coerce_ts(rd.get(ts_col)) if ts_col else "",
+                        "content": flatten_content(rd.get(content_col)) if content_col else "",
+                        "ts": coerce_ts(rd.get(ts_col)) if ts_col else "",
                     }
                 )
             return out
@@ -228,90 +145,27 @@ class OpenCodeIngestor:
         for cand in _MESSAGE_TABLES:
             if cand in names:
                 return cand
-        # Fall back to any table that has a content-like and a session-like col.
+        # Fall back to any table that has a content-like and a role-like col.
         for name in names:
             cols = [r[1] for r in conn.execute(f"PRAGMA table_info({name})").fetchall()]
-            if _first_present(cols, _CONTENT_COLS) and _first_present(cols, _ROLE_COLS):
+            if first_present(cols, _CONTENT_COLS) and first_present(cols, _ROLE_COLS):
                 return name
         return None
 
-    # ------------------------------------------------------------------
-    # Spine write
-    # ------------------------------------------------------------------
-    async def _append_message_event(
-        self, source: str, row: Dict[str, Any], repo_id: Optional[str]
-    ) -> bool:
-        # Deterministic id => idempotent even if the high-water mark is reset.
-        event_id = f"ingest:{source}:{row['id']}"
-        if await self._db.event_exists(event_id):
-            return False
-
-        content = row.get("content") or ""
-        session_id = row.get("session_id") or ""
-        role = row.get("role") or "unknown"
-        ts = row.get("ts") or _now()
-
-        summary = content.strip().replace("\n", " ")[:_SUMMARY_CHARS]
-        payload: Dict[str, Any] = {
-            "tool": "opencode",
-            "ingest_source": source,
-            "external_id": row["id"],
-            "session_uid": session_id,
-            "role": role,
-            "text": content,
-            "summary": summary,
-        }
-        # Carry a deterministic consolidation hint so the ingested session
-        # surfaces as a typed fact in briefs — same contract as hand.transcript.
-        # Only assistant/tool output carries durable signal worth a fact; user
-        # prompts and empty rows are recorded as events but not folded.
-        if content.strip() and role.lower() in ("assistant", "tool", "model"):
-            topic = f"opencode-session:{session_id or row['id']}"
-            payload["fact"] = {
-                "topic": topic,
-                "statement": (
-                    f"OpenCode session {session_id or row['id']} ({role}): "
-                    f"{content.strip()[:_FACT_STATEMENT_CHARS]}"
-                ),
-                "tags": ["ingest", "opencode", "transcript"],
-            }
-
+    def _cheap_count(self, path: Path) -> Tuple[Optional[int], str]:
         try:
-            await self._db.append_event(
-                event_id=event_id,
-                type="ingest.opencode.message",
-                source="ingest.opencode",
-                ts=ts if isinstance(ts, str) and ts else _now(),
-                thread_id=None,
-                task_id=None,
-                repo_id=repo_id,
-                importance="low",
-                payload=payload,
-            )
-        except sqlite3.IntegrityError:
-            # Lost a race / duplicate id: idempotency holds, count as not-written.
-            return False
-        except Exception:
-            logger.debug("ingest event write failed for %s", event_id, exc_info=True)
-            return False
-
-        if self._event_bus is not None:
+            uri = f"file:{path.resolve()}?mode=ro"
+            conn = sqlite3.connect(uri, uri=True)
             try:
-                await self._event_bus.publish(
-                    {
-                        "id": event_id,
-                        "type": "ingest.opencode.message",
-                        "ts": ts if isinstance(ts, str) and ts else _now(),
-                        "source": "ingest.opencode",
-                        "repo_id": repo_id,
-                        "importance": "low",
-                        "payload": payload,
-                        "summary": summary,
-                    }
-                )
-            except Exception:
-                logger.debug("ingest event publish failed for %s", event_id, exc_info=True)
-        return True
+                table = self._resolve_table(conn)
+                if table is None:
+                    return None, "no message table found"
+                row = conn.execute(f"SELECT count(*) FROM {table}").fetchone()
+                return int(row[0]) if row else 0, ""
+            finally:
+                conn.close()
+        except Exception as exc:  # noqa: BLE001
+            return None, f"unreadable: {exc}"
 
 
 async def ingest_opencode_db(

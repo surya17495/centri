@@ -43,6 +43,12 @@ class IngestOpenCodeRequest(BaseModel):
     repo_id: str | None = None
 
 
+class BootstrapRequest(BaseModel):
+    # Optional explicit list of {agent, path, source?} to import. When omitted,
+    # bootstrap discovers + imports all available default/configured sources.
+    sources: list[dict] | None = None
+
+
 class ContextRequest(BaseModel):
     surface: str | None = None
     title: str | None = None
@@ -340,6 +346,48 @@ async def ingest_opencode(req: IngestOpenCodeRequest) -> Dict[str, Any]:
         db_path, source=req.source, repo_id=req.repo_id
     )
     return result
+
+
+@app.get("/ingest/discover")
+async def ingest_discover() -> Dict[str, Any]:
+    """Probe well-known coding-agent stores and report what was found (3b.4).
+
+    Read-only: a client can ask "found 1,400 OpenCode messages, 600 Claude Code
+    sessions — import?" before committing to a bootstrap. Honest-unavailable —
+    sources that are absent or unreadable carry a reason rather than being faked.
+    """
+    if runtime.ingest_registry is None:
+        return {"available": False, "reason": "ingestion subsystem not booted", "sources": []}
+    return runtime.ingest_registry.discover_summary()
+
+
+@app.post("/ingest/bootstrap")
+async def ingest_bootstrap(req: BootstrapRequest) -> Dict[str, Any]:
+    """One-time full import of discovered coding-agent histories (3b.4).
+
+    A fresh install runs this once so memory is complete from day one. Because
+    ingestion is high-water-mark based, bootstrap *is* the first tick — the same
+    code path as the ambient tail, just with an empty HWM. Idempotent: re-running
+    imports nothing new. Emits ``ingest.bootstrap.*`` progress events on the spine
+    so the shell timeline shows the import.
+    """
+    if runtime.ingest_registry is None:
+        return {"available": False, "reason": "ingestion subsystem not booted"}
+    sources = None
+    if req.sources:
+        from centri.ingest.base import DiscoveredSource
+
+        sources = [
+            DiscoveredSource(
+                agent=str(s.get("agent", "")),
+                path=str(s.get("path", "")),
+                available=True,
+                source=str(s.get("source", "")),
+            )
+            for s in req.sources
+            if s.get("agent") and s.get("path")
+        ]
+    return await runtime.ingest_registry.bootstrap(sources=sources)
 
 
 def _normalize_event_row(row: Dict[str, Any]) -> Dict[str, Any]:

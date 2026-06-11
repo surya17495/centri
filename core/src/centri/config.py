@@ -69,6 +69,16 @@ class Settings:
     # the POST /ingest/opencode endpoint still works for one-shot ingests.
     opencode_ingest_db: str = ""
 
+    # Ingestion adapter registry (3b.4): per-agent path overrides probed *in
+    # addition to* the platform defaults (comma-separated), and a comma-separated
+    # list of agents to disable (privacy / opt-out). Discovery + bootstrap probe
+    # well-known default ~/.claude, Cursor state.vscdb, opencode.db locations, so
+    # these are only needed when a store lives somewhere unusual.
+    ingest_opencode_paths: str = ""
+    ingest_claude_code_paths: str = ""
+    ingest_cursor_paths: str = ""
+    ingest_disabled_agents: str = ""
+
     # ACP hand — command that launches an Agent Client Protocol agent over stdio.
     # Every hand is uniformly "an ACP agent identified by a launch command";
     # Cursor / Claude Code / etc. are just different values here, not new code.
@@ -139,6 +149,10 @@ class Settings:
             letta_embedding_dim=int(os.getenv("CENTRI_LETTA_EMBEDDING_DIM", "4096")),
             opencode_cli=os.getenv("OPENCODE_CLI", "opencode"),
             opencode_ingest_db=os.getenv("CENTRI_OPENCODE_INGEST_DB", ""),
+            ingest_opencode_paths=os.getenv("CENTRI_INGEST_OPENCODE_PATHS", ""),
+            ingest_claude_code_paths=os.getenv("CENTRI_INGEST_CLAUDE_CODE_PATHS", ""),
+            ingest_cursor_paths=os.getenv("CENTRI_INGEST_CURSOR_PATHS", ""),
+            ingest_disabled_agents=os.getenv("CENTRI_INGEST_DISABLED_AGENTS", ""),
             acp_command=os.getenv("CENTRI_ACP_COMMAND", "opencode acp"),
             acp_opencode_command=os.getenv("CENTRI_ACP_OPENCODE_COMMAND", "opencode acp"),
             enabled_hands=enabled_hands,

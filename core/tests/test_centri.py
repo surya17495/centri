@@ -249,6 +249,62 @@ class TestIngest:
             assert r.status_code == 400
 
 
+class TestBootstrap:
+    """Phase 3b.4: GET /ingest/discover reports found coding-agent stores;
+    POST /ingest/bootstrap runs a one-time full import (idempotent) and emits
+    progress events on the spine. Endpoint behavior is fixture-verified via an
+    explicit source so the test never depends on the sandbox's real ~/.claude."""
+
+    def _make_db(self, path, rows):
+        import sqlite3
+        conn = sqlite3.connect(str(path))
+        conn.execute(
+            "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, created_at TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO message (id,session_id,role,content,created_at) VALUES (?,?,?,?,?)",
+            rows,
+        )
+        conn.commit()
+        conn.close()
+
+    async def test_discover_endpoint_shape(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            body = client.get("/ingest/discover").json()
+            assert "sources" in body and "agents" in body
+            assert "total_messages" in body and "available_count" in body
+            # The three registry agents are reported (none disabled by default).
+            assert set(body["agents"]) == {"opencode", "claude_code", "cursor"}
+
+    async def test_bootstrap_explicit_source_idempotent(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        import uuid
+        oc = Path(tempfile.mkdtemp()) / "opencode.db"
+        mid = f"bm-{uuid.uuid4().hex[:8]}"
+        self._make_db(oc, [(mid, "s1", "assistant", "bootstrap import", _now())])
+        with TestClient(app) as client:
+            first = client.post(
+                "/ingest/bootstrap",
+                json={"sources": [{"agent": "opencode", "path": str(oc),
+                                   "source": f"bs-{mid}"}]},
+            ).json()
+            assert first["imported"] == 1
+            # Idempotent: re-running imports nothing new.
+            second = client.post(
+                "/ingest/bootstrap",
+                json={"sources": [{"agent": "opencode", "path": str(oc),
+                                   "source": f"bs-{mid}"}]},
+            ).json()
+            assert second["imported"] == 0
+            # Progress events landed on the spine.
+            events = client.get("/events?limit=50").json()["events"]
+            types = [e["type"] for e in events]
+            assert "ingest.bootstrap.completed" in types
+
+
 class TestAuth:
     """Phase 3a: shared-secret bearer auth for VM deployment.
 
