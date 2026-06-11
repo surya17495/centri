@@ -53,7 +53,13 @@ function applyEvent(state: AggregateState, ev: CentriEvent, index: number): Aggr
       ev.text ?? ev.summary ?? ev.message ?? (ev.payload?.text as string) ?? "";
     if (text) {
       const key = eventId(ev, index);
-      upsert(state, key, { kind: "narration", id: key, ts, text });
+      upsert(state, key, {
+        kind: "narration",
+        id: key,
+        ts,
+        text,
+        role: type === "user.utterance" ? "user" : "assistant",
+      });
     }
     return state;
   }

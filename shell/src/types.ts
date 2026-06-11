@@ -90,7 +90,7 @@ export interface ApprovalCard {
 
 // A flat, render-ready timeline item.
 export type TimelineItem =
-  | { kind: "narration"; id: string; ts: string; text: string }
+  | { kind: "narration"; id: string; ts: string; text: string; role?: "user" | "assistant" }
   | { kind: "task"; id: string; ts: string; card: TaskCard }
   | { kind: "approval"; id: string; ts: string; card: ApprovalCard }
   | { kind: "event"; id: string; ts: string; event: CentriEvent };

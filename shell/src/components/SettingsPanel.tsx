@@ -2,6 +2,19 @@ import { useState } from "react";
 import { api, getBackendUrl, setBackendUrl } from "../api";
 import type { StatusResponse } from "../types";
 
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="text-[11px] font-semibold uppercase tracking-wider text-ink-faint">
+      {children}
+    </div>
+  );
+}
+
+const FIELD =
+  "rounded-lg border border-line bg-surface-0 px-2.5 py-1.5 text-xs text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none transition-colors";
+const PRIMARY_BTN =
+  "rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover";
+
 export function SettingsPanel({
   status,
   onClose,
@@ -36,98 +49,122 @@ export function SettingsPanel({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 pt-16"
+      className="fixed inset-0 z-50 flex justify-end bg-black/55 backdrop-blur-[2px] animate-fade-in"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md rounded-2xl border border-surface-2 bg-surface-1 p-5 shadow-xl"
+        className="scrollbar-thin h-full w-full max-w-sm overflow-y-auto border-l border-line bg-surface-1 p-6 shadow-drawer animate-slide-in-right"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-ink">Settings</h2>
-          <button onClick={onClose} aria-label="Close settings" className="text-ink-dim hover:text-ink">
-            ✕
+          <h2 className="text-sm font-semibold tracking-tight text-ink">Settings</h2>
+          <button
+            onClick={onClose}
+            aria-label="Close settings"
+            className="rounded-lg p-1.5 text-ink-dim transition-colors hover:bg-surface-2 hover:text-ink"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" />
+            </svg>
           </button>
         </div>
 
-        <section className="mt-5">
-          <label className="text-xs font-medium text-ink-dim">Backend URL</label>
-          <div className="mt-1.5 flex gap-2">
+        <section className="mt-7">
+          <SectionTitle>Backend</SectionTitle>
+          <div className="mt-2.5 flex gap-2">
             <input
               value={backend}
               onChange={(e) => setBackend(e.target.value)}
-              className="flex-1 rounded-lg border border-surface-2 bg-surface-0 px-2.5 py-1.5 text-xs text-ink focus:border-accent focus:outline-none"
+              aria-label="Backend URL"
+              className={`flex-1 font-mono ${FIELD}`}
             />
-            <button
-              onClick={saveBackend}
-              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover"
-            >
+            <button onClick={saveBackend} className={PRIMARY_BTN}>
               Save
             </button>
           </div>
         </section>
 
-        <section className="mt-5">
-          <label className="text-xs font-medium text-ink-dim">API key (BYOK)</label>
-          <div className="mt-1.5 flex gap-2">
-            <select
-              value={provider}
-              onChange={(e) => setProvider(e.target.value)}
-              className="rounded-lg border border-surface-2 bg-surface-0 px-2 py-1.5 text-xs text-ink focus:border-accent focus:outline-none"
-            >
-              <option value="anthropic">Anthropic</option>
-              <option value="openai">OpenAI</option>
-              <option value="openrouter">OpenRouter</option>
-            </select>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-…"
-              className="flex-1 rounded-lg border border-surface-2 bg-surface-0 px-2.5 py-1.5 text-xs text-ink focus:border-accent focus:outline-none"
-            />
-            <button
-              onClick={connectKey}
-              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover"
-            >
+        <section className="mt-7">
+          <SectionTitle>API key (BYOK)</SectionTitle>
+          <div className="mt-2.5 space-y-2">
+            <div className="flex gap-2">
+              <select
+                value={provider}
+                onChange={(e) => setProvider(e.target.value)}
+                className={`shrink-0 ${FIELD}`}
+              >
+                <option value="anthropic">Anthropic</option>
+                <option value="openai">OpenAI</option>
+                <option value="openrouter">OpenRouter</option>
+              </select>
+              <input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="sk-…"
+                className={`min-w-0 flex-1 font-mono ${FIELD}`}
+              />
+            </div>
+            <button onClick={connectKey} className={`w-full ${PRIMARY_BTN}`}>
               Connect
             </button>
           </div>
-          {keyStatus && <div className="mt-1.5 text-xs text-ink-dim">{keyStatus}</div>}
+          {keyStatus && (
+            <div className="mt-2 text-xs text-ink-dim animate-fade-in">{keyStatus}</div>
+          )}
         </section>
 
-        <section className="mt-5">
-          <div className="text-xs font-medium text-ink-dim">Hands</div>
-          <div className="mt-1.5 space-y-1">
+        <section className="mt-7">
+          <SectionTitle>Hands</SectionTitle>
+          <div className="mt-2.5 divide-y divide-line rounded-xl border border-line bg-surface-0/60">
             {(status?.hands ?? []).map((h) => (
               <div
                 key={`${h.name}::${h.detail}`}
                 title={h.detail}
-                className="flex items-center justify-between text-xs"
+                className="flex items-center justify-between px-3 py-2 text-xs"
               >
-                <span className="text-ink">{h.name}</span>
-                <span className={h.healthy ? "text-emerald-400" : "text-ink-faint"}>
+                <span className="font-medium text-ink">{h.name}</span>
+                <span
+                  className={`inline-flex items-center gap-1.5 ${
+                    h.healthy ? "text-emerald-400" : "text-ink-faint"
+                  }`}
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      h.healthy ? "bg-emerald-400" : "bg-ink-faint"
+                    }`}
+                    aria-hidden
+                  />
                   {h.configured ? (h.healthy ? "healthy" : "unhealthy") : "not configured"}
                 </span>
               </div>
             ))}
-            {!status && <div className="text-xs text-ink-faint">Connect to backend to view hands.</div>}
+            {!status && (
+              <div className="px-3 py-2 text-xs text-ink-faint">
+                Connect to backend to view hands.
+              </div>
+            )}
           </div>
         </section>
 
-        <section className="mt-5">
-          <div className="text-xs font-medium text-ink-dim">Model roles</div>
-          <div className="mt-1.5 space-y-1">
+        <section className="mt-7">
+          <SectionTitle>Model roles</SectionTitle>
+          <div className="mt-2.5 divide-y divide-line rounded-xl border border-line bg-surface-0/60">
             {Object.entries(status?.role_models ?? {}).map(([role, info]) => (
-              <div key={role} className="flex items-center justify-between text-xs">
-                <span className="text-ink-dim">{role}</span>
-                <span className={info.configured && info.model ? "text-ink" : "text-ink-faint"}>
+              <div key={role} className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
+                <span className="shrink-0 text-ink-dim">{role}</span>
+                <span
+                  className={`truncate text-right font-mono text-[11px] ${
+                    info.configured && info.model ? "text-ink" : "text-ink-faint"
+                  }`}
+                  title={info.via_proxy ? "via proxy" : undefined}
+                >
                   {info.configured && info.model ? info.model : "not configured"}
                 </span>
               </div>
             ))}
             {(!status || Object.keys(status.role_models).length === 0) && (
-              <div className="text-xs text-ink-faint">No role mapping reported.</div>
+              <div className="px-3 py-2 text-xs text-ink-faint">No role mapping reported.</div>
             )}
           </div>
         </section>
