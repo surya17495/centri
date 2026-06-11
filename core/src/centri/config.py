@@ -65,12 +65,18 @@ class Settings:
     opencode_cli: str = "opencode"
 
     # ACP hand — command that launches an Agent Client Protocol agent over stdio.
-    # OpenCode's ACP serve mode is the default; any ACP-compatible binary works.
-    acp_command: str = ""
+    # Every hand is uniformly "an ACP agent identified by a launch command";
+    # Cursor / Claude Code / etc. are just different values here, not new code.
+    # The canonical default coding hand is OpenCode-over-ACP, so acp_command
+    # defaults to "opencode acp" explicitly (ROADMAP "Decisions"). The native
+    # OpenCode subprocess hand below is a degraded fallback, not the default.
+    acp_command: str = "opencode acp"
     acp_opencode_command: str = "opencode acp"
 
     # Hands. enabled_hands lists which hands to register; hand_priority is the
     # preference order used by the router (a healthy higher-priority hand wins).
+    # "acp" first => OpenCode-over-ACP is the default; "opencode" (native
+    # subprocess) is the degraded fallback retained for when no ACP peer is up.
     enabled_hands: List[str] = field(default_factory=lambda: ["acp", "opencode"])
     hand_priority: List[str] = field(default_factory=lambda: ["acp", "opencode"])
 
@@ -127,7 +133,7 @@ class Settings:
             letta_embedding_endpoint=os.getenv("CENTRI_LETTA_EMBEDDING_ENDPOINT", "http://127.0.0.1:8901/v1"),
             letta_embedding_dim=int(os.getenv("CENTRI_LETTA_EMBEDDING_DIM", "4096")),
             opencode_cli=os.getenv("OPENCODE_CLI", "opencode"),
-            acp_command=os.getenv("CENTRI_ACP_COMMAND", ""),
+            acp_command=os.getenv("CENTRI_ACP_COMMAND", "opencode acp"),
             acp_opencode_command=os.getenv("CENTRI_ACP_OPENCODE_COMMAND", "opencode acp"),
             enabled_hands=enabled_hands,
             hand_priority=hand_priority,

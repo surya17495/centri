@@ -6,11 +6,14 @@ external coding agents and keeps durable, auditable track of everything that
 happens. It is model-agnostic — bring your own LLM stack (BYOK) or, later, use a
 bundled subscription.
 
-Coding work is delegated through a **hand** abstraction. As of Phase 1 the default
-hand is the Agent Client Protocol (ACP, JSON-RPC over stdio) client, which streams
-live progress and round-trips destructive-action permission requests through
-CENTRI's approval gate; any ACP-compatible agent (OpenCode, etc.) can be plugged in
-by command. The original OpenCode CLI subprocess remains as a fallback hand.
+Coding work is delegated through a **hand** abstraction. Every hand is uniformly
+*an ACP agent (Agent Client Protocol, JSON-RPC over stdio) identified by a launch
+command* — the client streams live progress and round-trips destructive-action
+permission requests through CENTRI's approval gate. The **canonical default hand
+is OpenCode-over-ACP** (`CENTRI_ACP_COMMAND=opencode acp`); other agents (Cursor,
+Claude Code, …) are config entries, not new code — just point the command
+elsewhere. The native OpenCode CLI subprocess hand is retained as a **degraded
+fallback** for when no ACP peer is reachable.
 
 The core design principle is that **events are the source of truth; memory is a
 derived, re-derivable index.** Every runtime event is written to an append-only

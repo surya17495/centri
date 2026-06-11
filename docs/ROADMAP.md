@@ -3,6 +3,33 @@
 Design principle across every phase: **events are the source of truth; memory is
 a derived, re-derivable index.**
 
+## Decisions (ratified 2026-06-11)
+
+Three vision decisions the owner ratified; they bound the scope of the phases
+below.
+
+1. **Cross-channel continuity = shared core, not a sync layer.** All clients
+   (desktop Tauri, web, mobile PWA) talk to the *same* FastAPI + WebSocket
+   server. There is **no** sync layer, offline cache, conflict resolution, or
+   per-device cursor — explicitly **out of scope** unless a hosted/offline
+   future forces it. The remaining multi-channel work is only: build/smoke the
+   Tauri binary, deploy the React app as web, and add a PWA manifest for mobile.
+   One memory, one server; separation lives only in the chat UI (see 3b.2).
+2. **OpenCode-over-ACP is the canonical default coding hand.** Every hand is
+   uniformly *an ACP agent identified by a launch command*; Cursor, Claude
+   Code, etc. are **config entries, not code** (set `CENTRI_ACP_COMMAND`). The
+   default is OpenCode-over-ACP (`acp_command="opencode acp"`, `acp` first in
+   `hand_priority`). The native OpenCode subprocess hand is **demoted to a
+   degraded fallback** (kept, not deleted). Real-binary verification is still
+   pending on a real machine.
+3. **Memory management stays deterministic — no LLMs in the consolidation
+   loop.** The sleep cycle folds typed event hints into the graph with no model
+   call. LLMs are allowed **only** behind optional seams that have deterministic
+   fallbacks: (a) tiered summarization digests in 3c.1, (b) future semantic
+   top-k recall. **Re-derivability from the event ledger remains an
+   invariant** — the graph must always be reconstructable via
+   `rebuild_from_events()`.
+
 ## Phase 0 — Foundation (this phase)
 
 Port the HAL core into the `centri` package and establish the interfaces the rest
@@ -108,6 +135,14 @@ What that decomposes into, and the phase that closes each piece:
 | Flat consolidation won't hold precision at 10^6 events | 3c |
 | Memory quality unmeasured between releases | 3e |
 
+Per Decision 1, the "one memory across every client" half of the vision is
+**already structurally closed**: all clients hit the same FastAPI + WS core, so
+continuity is a property of the shared server, not of a sync layer. The only
+multi-channel work left is surface delivery — build/smoke the Tauri binary,
+deploy the React app as web, add a PWA manifest for mobile — with no offline
+cache / conflict resolution / device cursors unless a hosted/offline future
+demands them.
+
 ## Phase 3b — Capture completeness
 
 Make the spine actually see everything. Small, independent pieces — each lands
@@ -142,7 +177,10 @@ Precision must survive 10^6 events; the read path must stay history-independent.
 
 - **3c.1 Tiered consolidation.** Daily → weekly digests; entity pages
   (per-repo/project/host) maintained by supersession. Brief reads digests +
-  entity pages + ANN top-k, never scans the spine.
+  entity pages + ANN top-k, never scans the spine. Per Decision 3, the digest
+  summarizer may sit behind an optional LLM seam but **must** keep a
+  deterministic fallback and stay re-derivable from the ledger; the
+  consolidation loop itself takes no model call.
 - **3c.2 Temporal queries.** "What changed since X", "where did we leave off"
   answered from the digest hierarchy.
 - **3c.3 Aged-spine bench.** Synthetic 2-year/10^6-event spine; measure brief

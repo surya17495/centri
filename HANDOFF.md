@@ -22,6 +22,26 @@ right context before I have to ask." One memory across all clients
 (desktop/web/mobile); separation lives only in the chat UI. See
 `docs/ROADMAP.md` → "The vision gap" for the full decomposition.
 
+## Decisions (ratified 2026-06-11) — do not relitigate without the owner
+
+Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
+
+1. **Continuity = shared core, no sync layer.** All clients hit the same
+   FastAPI + WS server. NO sync layer / offline cache / conflict resolution /
+   device cursors — out of scope unless a hosted/offline future demands it.
+   Remaining multi-channel work is only: build/smoke Tauri binary, deploy React
+   as web, PWA for mobile.
+2. **OpenCode-over-ACP is the default coding hand.** Every hand is "an ACP agent
+   identified by a launch command"; Cursor/Claude Code/etc. are config entries,
+   not code. Default is explicit now: `acp_command="opencode acp"`, `acp` first
+   in `hand_priority`. Native OpenCode subprocess hand = degraded fallback (kept,
+   not deleted). Real-binary verification still pending on a real machine.
+3. **Deterministic memory — no LLMs in the consolidation loop.** LLMs allowed
+   only behind optional seams with deterministic fallbacks: (a) tiered
+   summarization digests in 3c.1, (b) future semantic top-k recall.
+   Re-derivability from the event ledger (`rebuild_from_events()`) stays an
+   invariant.
+
 ## Work queue (do in order; each is one commit+push)
 
 - [x] **3b.1 Full hand transcripts** — DONE. Both hands now record a
