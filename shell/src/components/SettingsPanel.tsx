@@ -100,7 +100,11 @@ export function SettingsPanel({
           <div className="text-xs font-medium text-ink-dim">Hands</div>
           <div className="mt-1.5 space-y-1">
             {(status?.hands ?? []).map((h) => (
-              <div key={h.name} className="flex items-center justify-between text-xs">
+              <div
+                key={`${h.name}::${h.detail}`}
+                title={h.detail}
+                className="flex items-center justify-between text-xs"
+              >
                 <span className="text-ink">{h.name}</span>
                 <span className={h.healthy ? "text-emerald-400" : "text-ink-faint"}>
                   {h.configured ? (h.healthy ? "healthy" : "unhealthy") : "not configured"}
@@ -114,10 +118,12 @@ export function SettingsPanel({
         <section className="mt-5">
           <div className="text-xs font-medium text-ink-dim">Model roles</div>
           <div className="mt-1.5 space-y-1">
-            {Object.entries(status?.role_models ?? {}).map(([role, model]) => (
+            {Object.entries(status?.role_models ?? {}).map(([role, info]) => (
               <div key={role} className="flex items-center justify-between text-xs">
                 <span className="text-ink-dim">{role}</span>
-                <span className="text-ink">{model}</span>
+                <span className={info.configured && info.model ? "text-ink" : "text-ink-faint"}>
+                  {info.configured && info.model ? info.model : "not configured"}
+                </span>
               </div>
             ))}
             {(!status || Object.keys(status.role_models).length === 0) && (

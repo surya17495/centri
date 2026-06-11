@@ -32,6 +32,13 @@ export interface HandCapability {
   detail: string;
 }
 
+export interface RoleModelInfo {
+  configured: boolean;
+  model?: string;
+  via_proxy?: boolean;
+  api_base?: string | null;
+}
+
 export interface StatusResponse {
   status: string;
   version: string;
@@ -39,7 +46,7 @@ export interface StatusResponse {
   running_tasks: number;
   active_threads: number;
   hands: HandCapability[];
-  role_models: Record<string, string>;
+  role_models: Record<string, RoleModelInfo>;
 }
 
 export interface UtteranceResponse {

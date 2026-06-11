@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import uuid
 from typing import Any, Dict, List
 
 from centri.redaction import redact_event
@@ -35,6 +36,10 @@ class EventBus:
     async def publish(self, event: Dict[str, Any]) -> None:
         # Scrub secrets before any client (WebSocket fan-out) sees the event.
         event = redact_event(event)
+        # Every published frame carries a stable id so clients can dedupe
+        # (e.g. across reconnects or history hydration). Publishers that
+        # persist events pass their DB event id; this is the safety net.
+        event.setdefault("id", f"evt-{uuid.uuid4().hex[:12]}")
         dead: List[asyncio.Queue] = []
         async with self._lock:
             queues = list(self._queues)

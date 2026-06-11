@@ -16,6 +16,12 @@ class Settings:
     core_host: str = "127.0.0.1"
     core_port: int = 8760
     core_token: str = "change-me"
+    cors_origins: tuple[str, ...] = (
+        "http://localhost:1420",
+        "http://127.0.0.1:1420",
+        "tauri://localhost",
+        "https://tauri.localhost",
+    )
 
     # Database
     db_path: Path = field(default_factory=lambda: Path.home() / ".centri" / "state.db")
@@ -82,10 +88,18 @@ class Settings:
         priority_raw = os.getenv("CENTRI_HAND_PRIORITY", "acp,opencode")
         hand_priority = [h.strip() for h in priority_raw.split(",") if h.strip()]
 
+        cors_raw = os.getenv("CENTRI_CORS_ORIGINS", "")
+        cors_origins = (
+            tuple(o.strip() for o in cors_raw.split(",") if o.strip())
+            if cors_raw
+            else cls.cors_origins
+        )
+
         return cls(
             core_host=os.getenv("CENTRI_CORE_HOST", "127.0.0.1"),
             core_port=int(os.getenv("CENTRI_CORE_PORT", "8760")),
             core_token=os.getenv("CENTRI_CORE_TOKEN", "change-me"),
+            cors_origins=cors_origins,
             db_path=db_path,
             litellm_base_url=os.getenv("LITELLM_BASE_URL", ""),
             litellm_api_key=os.getenv("LITELLM_API_KEY", ""),

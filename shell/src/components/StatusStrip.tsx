@@ -55,11 +55,13 @@ export function StatusStrip({
       <div className="flex items-center gap-3">
         {status?.role_models && Object.keys(status.role_models).length > 0 && (
           <span className="hidden gap-2 text-[10px] text-ink-faint sm:flex">
-            {Object.entries(status.role_models).map(([role, model]) => (
-              <span key={role} title={`${role}: ${model}`}>
-                {role}=<span className="text-ink-dim">{model}</span>
-              </span>
-            ))}
+            {Object.entries(status.role_models)
+              .filter(([, info]) => info.configured && info.model)
+              .map(([role, info]) => (
+                <span key={role} title={`${role}: ${info.model}${info.via_proxy ? " (via proxy)" : ""}`}>
+                  {role}=<span className="text-ink-dim">{info.model}</span>
+                </span>
+              ))}
           </span>
         )}
         <button

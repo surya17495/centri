@@ -145,7 +145,7 @@ function applyEvent(state: AggregateState, ev: CentriEvent, index: number): Aggr
           };
       if (type === "approval.resolved") {
         const decision =
-          (ev.payload?.decision as string) ?? (ev.status as string) ?? "";
+          (ev.payload?.decision as string) ?? (ev.status as string) ?? (ev.action as string) ?? "";
         card.resolved = decision === "approved" || decision === "allow" ? "approved" : "rejected";
       }
       state.approvals.set(approvalId, card);
@@ -208,6 +208,23 @@ export function useEventStream(): EventStream {
     if (closedRef.current) return;
     setConnection("connecting");
 
+    // Neutralize any previous socket before opening a new one. Without this,
+    // a reconnect racing a still-open socket (e.g. StrictMode remount) leaves
+    // two live connections feeding the same timeline — every event twice.
+    const prev = wsRef.current;
+    if (prev) {
+      prev.onopen = null;
+      prev.onmessage = null;
+      prev.onerror = null;
+      prev.onclose = null;
+      try {
+        prev.close();
+      } catch {
+        /* already closed */
+      }
+      wsRef.current = null;
+    }
+
     let ws: WebSocket;
     try {
       ws = new WebSocket(wsUrl());
@@ -225,7 +242,9 @@ export function useEventStream(): EventStream {
       api
         .recentEvents(100)
         .then((res) => {
-          for (const raw of res.events) {
+          // /events returns newest-first; replay oldest-first so the
+          // timeline reads chronologically.
+          for (const raw of [...res.events].reverse()) {
             applyEvent(stateRef.current, raw as CentriEvent, counterRef.current++);
           }
           bump();

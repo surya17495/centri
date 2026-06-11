@@ -74,6 +74,80 @@ class TestCoordinatorStatus:
             assert "intent" in payload["role_models"]
             assert "reasoning" in payload["role_models"]
 
+    async def test_role_models_entries_are_typed_objects(self):
+        # The shell renders role_models values as objects ({configured, model, ...});
+        # a bare string here would mean the API contract drifted from the UI types.
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            payload = client.get("/status").json()
+            for role, info in payload["role_models"].items():
+                assert isinstance(info, dict), f"role_models[{role}] must be an object"
+                assert "configured" in info
+
+    async def test_cors_allows_shell_origins(self):
+        # The shell (vite dev server / Tauri webview) calls the REST API
+        # cross-origin; without CORS headers every browser fetch is blocked.
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            r = client.get("/status", headers={"Origin": "http://localhost:1420"})
+            assert r.headers.get("access-control-allow-origin") == "http://localhost:1420"
+            pre = client.options(
+                "/utterance",
+                headers={
+                    "Origin": "http://127.0.0.1:1420",
+                    "Access-Control-Request-Method": "POST",
+                    "Access-Control-Request-Headers": "content-type",
+                },
+            )
+            assert pre.status_code == 200
+            assert pre.headers.get("access-control-allow-origin") == "http://127.0.0.1:1420"
+
+    async def test_events_endpoint_matches_live_envelope(self):
+        # The shell hydrates history from /events expecting the same shape as
+        # live WebSocket frames: parsed `payload` dict + top-level mirrors,
+        # never a raw payload_json string.
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            client.post("/utterance", json={"text": "hello centri", "user_id": "t"})
+            events = client.get("/events?limit=20").json()["events"]
+            assert events, "utterance should have produced events"
+            for ev in events:
+                assert "payload_json" not in ev
+                assert isinstance(ev.get("payload"), dict)
+                assert ev.get("id"), "every persisted event must carry a stable id"
+            utterances = [e for e in events if e["type"] == "user.utterance"]
+            assert utterances and utterances[0].get("text") == "hello centri"
+
+    async def test_approval_resolved_event_carries_decision(self, monkeypatch):
+        # The shell resolves approval cards from payload.decision / status;
+        # an approval.resolved frame without them renders 'Rejected' even
+        # when the user clicked Approve.
+        import centri.config as config_module
+        from centri.config import Settings
+        monkeypatch.setattr(config_module, "_settings", Settings(autonomy_level="supervised"))
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            r = client.post("/utterance", json={"text": "please refactor the auth module", "user_id": "t"})
+            data = r.json()
+            assert data["response_type"] == "approval_requested"
+            approval_id = data["data"]["approval_id"]
+            with client.websocket_connect("/events/stream") as ws:
+                res = client.post(f"/approvals/{approval_id}/approve")
+                assert res.json()["status"] == "approved"
+                for _ in range(50):
+                    ev = ws.receive_json()
+                    if ev.get("type") == "approval.resolved" and ev.get("approval_id") == approval_id:
+                        assert ev.get("status") == "approved"
+                        assert ev.get("payload", {}).get("decision") == "approved"
+                        assert ev.get("id", "").startswith("evt-")
+                        break
+                else:
+                    raise AssertionError("approval.resolved event not observed")
+
 
 class TestHands:
     async def test_opencode_capabilities(self):

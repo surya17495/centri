@@ -82,7 +82,9 @@ class Coordinator:
     ) -> None:
         ts = _now()
         body = dict(payload or {})
+        event_id = f"evt-{uuid.uuid4().hex[:12]}"
         event: Dict[str, Any] = {
+            "id": event_id,
             "type": event_type,
             "ts": ts,
             "source": source,
@@ -95,7 +97,7 @@ class Coordinator:
             if key in body:
                 event[key] = body[key]
         await self._db.append_event(
-            event_id=f"evt-{uuid.uuid4().hex[:12]}",
+            event_id=event_id,
             type=event_type,
             source=source,
             ts=ts,
