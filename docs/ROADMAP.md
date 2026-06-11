@@ -77,13 +77,96 @@ Design: [`memory-architecture.md`](memory-architecture.md). Benchmark:
 implementation starts — `docs/centri-bench.md` is that commitment, so the
 implementation cannot quietly target the test.
 
-## Phase 3 — Voice
+## Phase 3a — VM deployment hardening  ✅ implemented
 
-- Push-to-talk, streaming STT/TTS, barge-in.
-- Reintroduce the `voice.*` event families behind the clean interface stubbed in
-  Phase 0.
+Status: auth + deploy bundle **sandbox-verified**; systemd/Caddy/Let's Encrypt
+need a real VM (see [`../deploy/README.md`](../deploy/README.md)).
 
-## Phase 4 — Productization
+- ✅ Shared-secret bearer auth (`CENTRI_AUTH_TOKEN`): every REST route except
+  `/health`; WebSocket via `?token=`; constant-time compare; 401s carry CORS
+  headers. 5 `TestAuth` tests.
+- ✅ Shell: auth token field in Settings; token on every fetch + WS URL.
+- ✅ `deploy/`: idempotent `install.sh` (venv, generated token, systemd unit,
+  optional Caddy auto-TLS), `centri.service`, `Caddyfile`.
+
+---
+
+# The vision gap
+
+**Vision: a stateful agent that remembers everything we did and pulls the right
+context before being asked — one memory across every client, separation only in
+the chat UI.**
+
+What that decomposes into, and the phase that closes each piece:
+
+| Gap | Phase |
+| --- | --- |
+| Hands record summaries, not full transcripts | 3b.1 |
+| One global timeline; no chat separation (`thread_id` unused) | 3b.2 |
+| Work done outside CENTRI (Cursor/OpenCode-direct) invisible | 3b.3 |
+| Open loops tracked but never proactively closed | 3d.1 |
+| Flat consolidation won't hold precision at 10^6 events | 3c |
+| Memory quality unmeasured between releases | 3e |
+
+## Phase 3b — Capture completeness
+
+Make the spine actually see everything. Small, independent pieces — each lands
+with tests and its own commit.
+
+- **3b.1 Full hand transcripts.** ACP `agent_message_chunk` / tool-call text
+  currently truncates to 240 chars in `task.progress` summaries. Add
+  `hand.transcript` events carrying full text (chunk-coalesced per turn), keep
+  the short summaries for the UI, and let consolidation read transcripts.
+  Acceptance: a delegated session's full reasoning is recoverable from the
+  spine verbatim; consolidation hints include transcript content; pytest green.
+- **3b.2 Threads.** `events.thread_id` + `threads` table exist; nothing uses
+  them. `/utterance` accepts `thread_id` (creates on first use); `/events` and
+  `/threads` filter by it; shell gets a minimal thread sidebar (list, new,
+  switch — timeline scoped to active thread). Memory stays global — that is the
+  point. Acceptance: two threads with disjoint chat, one memory graph; brief in
+  thread B cites facts from thread A.
+- **3b.3 Ingestion adapters.** Tail external session stores (OpenCode
+  `opencode.db` first — richest) into spine events
+  (`ingest.opencode.message`, importance low, redaction applied). Idempotent
+  incremental sync (high-water mark per source), then consolidation digests
+  them like native events. Acceptance: point at a fixture opencode.db, events
+  appear once (re-run = no dupes), facts from an ingested session surface in a
+  brief.
+
+## Phase 3c — Retrieval at scale
+
+Precision must survive 10^6 events; the read path must stay history-independent.
+
+- **3c.1 Tiered consolidation.** Daily → weekly digests; entity pages
+  (per-repo/project/host) maintained by supersession. Brief reads digests +
+  entity pages + ANN top-k, never scans the spine.
+- **3c.2 Temporal queries.** "What changed since X", "where did we leave off"
+  answered from the digest hierarchy.
+- **3c.3 Aged-spine bench.** Synthetic 2-year/10^6-event spine; measure brief
+  precision/latency vs corpus size. Regression-gate it.
+
+## Phase 3d — Proactivity
+
+- **3d.1 Open-loop scheduler.** Scheduler tick scans live open loops with
+  due/stale policies → emits `loop.nudge` events → surfaces in timeline +
+  `/briefing` (and notification seam later). Acceptance: a loop created by a
+  failed task nudges once after its policy window, never re-nudges unresolved.
+- **3d.2 Watchers.** Long-running hand tasks report terminal state into the
+  loop graph; completion closes the loop and produces a brief line.
+
+## Phase 3e — Continuity bench (regression gate)
+
+Extend `centri-bench` with the failure modes that motivated CENTRI (from the
+user's real Hermes transcripts): unprompted cross-session awareness, fact
+supersession under config churn, cold-start recall on a fresh client, awareness
+of delegated-session work. Score native on every PR; alert on regression.
+
+## Phase 4 — Voice
+
+- Push-to-talk, streaming STT/TTS, barge-in; reintroduce `voice.*` event
+  families behind the Phase 0 interface.
+
+## Phase 5 — Productization
 
 - Onboarding wizard, BYOK configuration UI, packaging/distribution.
 - Bundled-subscription option for users who don't bring their own keys.
