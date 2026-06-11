@@ -4,13 +4,15 @@ Design principle: events are the source of truth; memory is a derived,
 re-derivable index. Every route reads from / writes through the event spine.
 """
 
+import hmac
 import json
 import logging
 from contextlib import asynccontextmanager
 from typing import Any, Dict
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from centri.config import get_settings
@@ -47,6 +49,38 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="CENTRI", version="0.1.0", lifespan=lifespan)
+
+# ----------------------------------------------------------------------
+# Auth (Phase 3a). A shared-secret bearer token guards every route except
+# /health (load-balancer probes) once CENTRI_AUTH_TOKEN is set. Empty token
+# (the default) keeps local development friction-free. Settings are read per
+# request so tests can swap them without rebuilding the app.
+# ----------------------------------------------------------------------
+_PUBLIC_PATHS = {"/health"}
+
+
+def _token_ok(provided: str | None) -> bool:
+    expected = get_settings().auth_token
+    if not expected:
+        return True
+    return provided is not None and hmac.compare_digest(provided, expected)
+
+
+def _bearer(value: str | None) -> str | None:
+    if value and value.lower().startswith("bearer "):
+        return value[7:].strip()
+    return None
+
+
+@app.middleware("http")
+async def _auth_middleware(request: Request, call_next):
+    # OPTIONS preflights never carry credentials; CORS middleware answers them.
+    if request.method == "OPTIONS" or request.url.path in _PUBLIC_PATHS:
+        return await call_next(request)
+    if not _token_ok(_bearer(request.headers.get("authorization"))):
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return await call_next(request)
+
 
 # The shell (Tauri webview or vite dev server) calls the REST API cross-origin;
 # without CORS headers every fetch is blocked by the browser even though the
@@ -291,6 +325,14 @@ async def get_events(limit: int = 50) -> Dict[str, Any]:
 
 @app.websocket("/events/stream")
 async def events_stream(websocket: WebSocket):
+    # Browsers cannot set headers on WebSocket connects, so the token may also
+    # arrive as a query parameter. Reject before accept => HTTP 403 handshake.
+    token = websocket.query_params.get("token") or _bearer(
+        websocket.headers.get("authorization")
+    )
+    if not _token_ok(token):
+        await websocket.close(code=4401)
+        return
     await websocket.accept()
     q = await runtime.event_bus.subscribe()
     try:

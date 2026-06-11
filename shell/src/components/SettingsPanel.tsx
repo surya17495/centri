@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, getBackendUrl, setBackendUrl } from "../api";
+import { api, getAuthToken, getBackendUrl, setAuthToken, setBackendUrl } from "../api";
 import type { StatusResponse } from "../types";
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
@@ -25,12 +25,14 @@ export function SettingsPanel({
   onSaved: () => void;
 }) {
   const [backend, setBackend] = useState(getBackendUrl());
+  const [token, setToken] = useState(getAuthToken());
   const [provider, setProvider] = useState("anthropic");
   const [apiKey, setApiKey] = useState("");
   const [keyStatus, setKeyStatus] = useState<string | null>(null);
 
   function saveBackend() {
     setBackendUrl(backend);
+    setAuthToken(token.trim());
     onSaved();
   }
 
@@ -71,14 +73,22 @@ export function SettingsPanel({
 
         <section className="mt-7">
           <SectionTitle>Backend</SectionTitle>
-          <div className="mt-2.5 flex gap-2">
+          <div className="mt-2.5 space-y-2">
             <input
               value={backend}
               onChange={(e) => setBackend(e.target.value)}
               aria-label="Backend URL"
-              className={`flex-1 font-mono ${FIELD}`}
+              className={`w-full font-mono ${FIELD}`}
             />
-            <button onClick={saveBackend} className={PRIMARY_BTN}>
+            <input
+              type="password"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              placeholder="Auth token (empty if core has none)"
+              aria-label="Auth token"
+              className={`w-full font-mono ${FIELD}`}
+            />
+            <button onClick={saveBackend} className={`w-full ${PRIMARY_BTN}`}>
               Save
             </button>
           </div>

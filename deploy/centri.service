@@ -1,0 +1,25 @@
+# CENTRI core — systemd unit (installed by deploy/install.sh)
+[Unit]
+Description=CENTRI core (FastAPI event spine + memory)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=centri
+Group=centri
+WorkingDirectory=/opt/centri/core
+EnvironmentFile=/etc/centri/centri.env
+ExecStart=/opt/centri/.venv/bin/python -m uvicorn centri.app:app --host ${CENTRI_CORE_HOST} --port ${CENTRI_CORE_PORT} --log-level info
+Restart=on-failure
+RestartSec=3
+
+# Hardening — the core only needs its own state dir and the repo.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths=/var/lib/centri
+
+[Install]
+WantedBy=multi-user.target

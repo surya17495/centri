@@ -149,6 +149,74 @@ class TestCoordinatorStatus:
                     raise AssertionError("approval.resolved event not observed")
 
 
+class TestAuth:
+    """Phase 3a: shared-secret bearer auth for VM deployment.
+
+    Empty token (default) keeps local dev open; once CENTRI_AUTH_TOKEN is set
+    every route except /health requires `Authorization: Bearer <token>` and
+    the WebSocket requires ?token= (browsers cannot set WS headers).
+    """
+
+    def _secure(self, monkeypatch, **kw):
+        import centri.config as config_module
+        monkeypatch.setattr(
+            config_module, "_settings", Settings(auth_token="s3cret", **kw)
+        )
+
+    async def test_rest_requires_token_when_configured(self, monkeypatch):
+        self._secure(monkeypatch)
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            assert client.get("/status").status_code == 401
+            assert (
+                client.get("/status", headers={"Authorization": "Bearer wrong"}).status_code
+                == 401
+            )
+            ok = client.get("/status", headers={"Authorization": "Bearer s3cret"})
+            assert ok.status_code == 200 and ok.json()["status"] == "ok"
+
+    async def test_health_stays_public_for_probes(self, monkeypatch):
+        self._secure(monkeypatch)
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            assert client.get("/health").status_code == 200
+
+    async def test_unauthorized_response_carries_cors_headers(self, monkeypatch):
+        # If the 401 lacked CORS headers the browser would report an opaque
+        # CORS failure instead of an auth failure — undebuggable from the shell.
+        self._secure(monkeypatch)
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            r = client.get("/status", headers={"Origin": "http://localhost:1420"})
+            assert r.status_code == 401
+            assert r.headers.get("access-control-allow-origin") == "http://localhost:1420"
+
+    async def test_websocket_requires_token(self, monkeypatch):
+        self._secure(monkeypatch)
+        import pytest
+        from starlette.websockets import WebSocketDisconnect
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            with pytest.raises(WebSocketDisconnect):
+                with client.websocket_connect("/events/stream") as ws:
+                    ws.receive_json()
+            # Query-param token (browser path) must be accepted.
+            with client.websocket_connect("/events/stream?token=s3cret"):
+                pass
+
+    async def test_auth_disabled_by_default(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            assert client.get("/status").status_code == 200
+            with client.websocket_connect("/events/stream"):
+                pass
+
+
 class TestHands:
     async def test_opencode_capabilities(self):
         from centri.hands import Hands

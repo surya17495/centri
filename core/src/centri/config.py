@@ -16,6 +16,9 @@ class Settings:
     core_host: str = "127.0.0.1"
     core_port: int = 8760
     core_token: str = "change-me"
+    # Shared-secret bearer token. Empty (default) = auth disabled for local dev;
+    # set CENTRI_AUTH_TOKEN when exposing the core beyond localhost (Phase 3a).
+    auth_token: str = ""
     cors_origins: tuple[str, ...] = (
         "http://localhost:1420",
         "http://127.0.0.1:1420",
@@ -99,6 +102,7 @@ class Settings:
             core_host=os.getenv("CENTRI_CORE_HOST", "127.0.0.1"),
             core_port=int(os.getenv("CENTRI_CORE_PORT", "8760")),
             core_token=os.getenv("CENTRI_CORE_TOKEN", "change-me"),
+            auth_token=os.getenv("CENTRI_AUTH_TOKEN", ""),
             cors_origins=cors_origins,
             db_path=db_path,
             litellm_base_url=os.getenv("LITELLM_BASE_URL", ""),

@@ -1,0 +1,18 @@
+# CENTRI TLS reverse proxy (installed by deploy/install.sh).
+# Caddy provisions and renews Let's Encrypt certificates automatically and
+# proxies WebSockets without extra config. Replace centri.example.com with
+# your domain (install.sh does this for you).
+
+centri.example.com {
+	encode gzip
+
+	# The core enforces bearer-token auth itself (CENTRI_AUTH_TOKEN);
+	# the proxy's only jobs are TLS and forwarding, including /events/stream.
+	reverse_proxy 127.0.0.1:8760
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+}

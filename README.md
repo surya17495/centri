@@ -113,6 +113,19 @@ in the sandbox — namely Rust/cargo for the Tauri desktop binary).
   typechecks (`tsc --noEmit` + `vite build`) and runs in a plain browser via
   `npm run dev` — activity timeline, streaming task cards, inline approval cards,
   command bar, status strip, settings panel. Component tests pass under vitest.
+- **Sandbox-verified (Phase 3a deployment hardening):** shared-secret bearer auth
+  (`CENTRI_AUTH_TOKEN`) on every REST route except `/health`, token-gated
+  `/events/stream` WebSocket (`?token=`, since browsers cannot set WS headers),
+  constant-time comparison, 401s that still carry CORS headers — covered by
+  `TestAuth` (5 tests) and verified live (curl 401/200, WS handshake 403→101, full
+  shell journey against a secured core with the token entered in Settings). The
+  glassmorphism shell ships an Auth token field under Settings → Backend.
+- **Needs a real VM (Phase 3a, honest):** [`deploy/`](deploy/README.md) provides an
+  idempotent `install.sh` (venv + env file with generated token + systemd unit +
+  Caddy auto-TLS reverse proxy), `centri.service`, and a `Caddyfile`. The script is
+  syntax-checked and the auth flow it configures is sandbox-verified, but systemd
+  lifecycle, Caddy install, and Let's Encrypt issuance need a real Ubuntu VM with a
+  domain.
 - **Needs-local-build:** the Tauri 2 desktop wrapper (`shell/src-tauri/`). Fully
   scaffolded (single resizable window, 480px min, dark theme, capabilities,
   global-shortcut stub) but `cargo`/Rust is not available in the sandbox, so

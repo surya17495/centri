@@ -1,6 +1,7 @@
 import type { StatusResponse, UtteranceResponse } from "./types";
 
 const STORAGE_KEY = "centri.backendUrl";
+const TOKEN_KEY = "centri.authToken";
 const DEFAULT_BACKEND = "http://127.0.0.1:8760";
 
 export function getBackendUrl(): string {
@@ -19,14 +20,41 @@ export function setBackendUrl(url: string): void {
   }
 }
 
+export function getAuthToken(): string {
+  try {
+    return localStorage.getItem(TOKEN_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function setAuthToken(token: string): void {
+  try {
+    if (token) {
+      localStorage.setItem(TOKEN_KEY, token);
+    } else {
+      localStorage.removeItem(TOKEN_KEY);
+    }
+  } catch {
+    /* ignore storage failures (private mode, etc.) */
+  }
+}
+
 export function wsUrl(): string {
-  const base = getBackendUrl();
-  return base.replace(/^http/, "ws") + "/events/stream";
+  const base = getBackendUrl().replace(/^http/, "ws") + "/events/stream";
+  const token = getAuthToken();
+  // Browsers cannot attach headers to WebSocket handshakes; the core accepts
+  // the bearer token as a query parameter instead.
+  return token ? `${base}?token=${encodeURIComponent(token)}` : base;
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getAuthToken();
   const res = await fetch(getBackendUrl() + path, {
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     ...init,
   });
   if (!res.ok) {
