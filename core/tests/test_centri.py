@@ -149,6 +149,56 @@ class TestCoordinatorStatus:
                     raise AssertionError("approval.resolved event not observed")
 
 
+class TestThreads:
+    """Phase 3b.2: chat threads scope the timeline; memory stays global."""
+
+    async def test_utterance_creates_default_thread_and_tags_events(self):
+        # No thread_id supplied -> events land in the catch-all chat thread so
+        # /events?thread_id= can still partition them.
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            client.post("/utterance", json={"text": "hello", "user_id": "t"})
+            events = client.get("/events?thread_id=th-default").json()["events"]
+            utterances = [e for e in events if e["type"] == "user.utterance"]
+            assert utterances, "default-thread utterance should be filterable"
+            assert utterances[0]["thread_id"] == "th-default"
+
+    async def test_explicit_thread_id_is_accepted_and_created_on_first_use(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            client.post(
+                "/utterance",
+                json={"text": "scoped hi", "user_id": "t", "thread_id": "th-explicit"},
+            )
+            threads = {t["id"] for t in client.get("/threads").json()["threads"]}
+            assert "th-explicit" in threads, "first use must create the thread"
+            ev = client.get("/events?thread_id=th-explicit").json()["events"]
+            assert any(e.get("text") == "scoped hi" for e in ev)
+
+    async def test_threads_have_disjoint_chat(self):
+        # Acceptance: two threads, disjoint chat timelines.
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            client.post("/utterance", json={"text": "in thread A", "thread_id": "th-A"})
+            client.post("/utterance", json={"text": "in thread B", "thread_id": "th-B"})
+            a_texts = [e.get("text") for e in client.get("/events?thread_id=th-A").json()["events"]]
+            b_texts = [e.get("text") for e in client.get("/events?thread_id=th-B").json()["events"]]
+            assert "in thread A" in a_texts and "in thread A" not in b_texts
+            assert "in thread B" in b_texts and "in thread B" not in a_texts
+
+    async def test_create_thread_endpoint(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            created = client.post("/threads", json={"title": "Planning"}).json()["thread"]
+            assert created["id"].startswith("th-") and created["title"] == "Planning"
+            ids = {t["id"] for t in client.get("/threads").json()["threads"]}
+            assert created["id"] in ids
+
+
 class TestAuth:
     """Phase 3a: shared-secret bearer auth for VM deployment.
 

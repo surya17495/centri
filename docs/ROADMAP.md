@@ -124,7 +124,10 @@ with tests and its own commit.
   `/threads` filter by it; shell gets a minimal thread sidebar (list, new,
   switch — timeline scoped to active thread). Memory stays global — that is the
   point. Acceptance: two threads with disjoint chat, one memory graph; brief in
-  thread B cites facts from thread A.
+  thread B cites facts from thread A. **Done (2026-06-11):** `/utterance`
+  `thread_id` (create-on-first-use, `th-default` fallback), `/events?thread_id=`
+  filter, POST `/threads`, `ThreadSidebar` + thread-scoped `useEventStream`;
+  `/briefing` + `/memory/graph` stay unscoped. See `HANDOFF.md`.
 - **3b.3 Ingestion adapters.** Tail external session stores (OpenCode
   `opencode.db` first — richest) into spine events
   (`ingest.opencode.message`, importance low, redaction applied). Idempotent

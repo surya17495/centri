@@ -27,6 +27,12 @@ class UtteranceRequest(BaseModel):
     text: str
     user_id: str = "local"
     source: str = "desktop_text"
+    thread_id: str | None = None
+
+
+class CreateThreadRequest(BaseModel):
+    title: str | None = None
+    goal: str = ""
 
 
 class ContextRequest(BaseModel):
@@ -130,7 +136,9 @@ async def status() -> Dict[str, Any]:
 
 @app.post("/utterance")
 async def utterance(req: UtteranceRequest) -> Dict[str, Any]:
-    result = await runtime.coordinator.handle_utterance(req.text, req.user_id, req.source)
+    result = await runtime.coordinator.handle_utterance(
+        req.text, req.user_id, req.source, thread_id=req.thread_id
+    )
     return result.__dict__
 
 
@@ -289,6 +297,24 @@ async def get_threads() -> Dict[str, Any]:
     return {"threads": threads}
 
 
+@app.post("/threads")
+async def create_thread(req: CreateThreadRequest) -> Dict[str, Any]:
+    """Create an empty chat thread (sidebar 'new'). Memory stays global."""
+    import uuid
+    from datetime import datetime, timezone
+
+    thread_id = f"th-{uuid.uuid4().hex[:8]}"
+    ts = datetime.now(timezone.utc).isoformat()
+    await runtime.db.create_thread(
+        thread_id=thread_id,
+        title=(req.title or "New chat"),
+        goal=req.goal,
+        created_at=ts,
+        updated_at=ts,
+    )
+    return {"thread": await runtime.db.get_thread(thread_id)}
+
+
 def _normalize_event_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """Shape a DB event row like the live WebSocket envelope.
 
@@ -318,8 +344,8 @@ def _normalize_event_row(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @app.get("/events")
-async def get_events(limit: int = 50) -> Dict[str, Any]:
-    events = await runtime.db.recent_events(limit=limit)
+async def get_events(limit: int = 50, thread_id: str | None = None) -> Dict[str, Any]:
+    events = await runtime.db.recent_events(limit=limit, thread_id=thread_id)
     return {"events": [_normalize_event_row(dict(e)) for e in events]}
 
 

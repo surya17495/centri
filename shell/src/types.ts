@@ -49,6 +49,14 @@ export interface StatusResponse {
   role_models: Record<string, RoleModelInfo>;
 }
 
+export interface Thread {
+  id: string;
+  title: string;
+  goal?: string;
+  status?: string;
+  updated_at?: string;
+}
+
 export interface UtteranceResponse {
   response_type: string;
   message: string;

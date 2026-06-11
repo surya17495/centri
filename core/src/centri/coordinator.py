@@ -115,17 +115,56 @@ class Coordinator:
     # ------------------------------------------------------------------
     # Main entry
     # ------------------------------------------------------------------
+    async def _resolve_thread(self, thread_id: Optional[str]) -> str:
+        """Resolve the chat thread an utterance belongs to, creating on first use.
+
+        Threads scope the *chat* timeline only; memory stays global (the whole
+        point of 3b.2). A caller may pass an explicit id (sidebar switch) or
+        none, in which case utterances land in a single default thread so every
+        chat event still has a home and `/events?thread_id=` can filter them.
+        """
+        if thread_id:
+            existing = await self._db.get_thread(thread_id)
+            if not existing:
+                await self._db.create_thread(
+                    thread_id=thread_id,
+                    title="New chat",
+                    goal="",
+                    created_at=_now(),
+                    updated_at=_now(),
+                )
+            else:
+                await self._db.update_thread(thread_id=thread_id, updated_at=_now())
+            return thread_id
+        return await self._default_thread()
+
+    async def _default_thread(self) -> str:
+        """The catch-all chat thread used when no thread_id is supplied."""
+        existing = await self._db.get_thread("th-default")
+        if not existing:
+            await self._db.create_thread(
+                thread_id="th-default",
+                title="General",
+                goal="",
+                created_at=_now(),
+                updated_at=_now(),
+            )
+        return "th-default"
+
     async def handle_utterance(
         self,
         text: str,
         user_id: str,
         source: str = "voice",
+        thread_id: Optional[str] = None,
     ) -> CoordinatorResponse:
         # Voice greeting is a special path
         if text == "__voice_greeting__":
             greeting = self._mr.narrate("Greet the user and offer your assistance.", voice=True)
             await self._narrate(greeting)
             return CoordinatorResponse(response_type="greeting", message=greeting)
+
+        chat_thread = await self._resolve_thread(thread_id)
 
         await self._db.store_message(
             channel=source,
@@ -141,9 +180,10 @@ class Coordinator:
             type="user.utterance",
             source=source,
             ts=_now(),
-            payload={"text": text, "user_id": user_id},
+            thread_id=chat_thread,
+            payload={"text": text, "user_id": user_id, "thread_id": chat_thread},
         )
-        await self._publish({"type": "user.utterance", "text": text, "user_id": user_id, "ts": _now()})
+        await self._publish({"type": "user.utterance", "text": text, "user_id": user_id, "thread_id": chat_thread, "ts": _now()})
 
         # Build context in parallel with memory recall
         packet, _recall = await self._build_context_parallel(text)
@@ -169,7 +209,7 @@ class Coordinator:
         await self._record_event(
             "coordinator.response",
             source="coordinator",
-            thread_id=resp.data.get("thread_id") if isinstance(resp.data, dict) else None,
+            thread_id=chat_thread,
             task_id=resp.data.get("task_id") if isinstance(resp.data, dict) else None,
             payload={
                 "response_type": resp.response_type,

@@ -8,8 +8,8 @@ Owner: surya (surya.munna95@gmail.com). Repo: https://github.com/surya17495/cent
    of work). Pushed code is the only safe code; the session may die any time.
    Git identity: `-c user.name="surya17495" -c user.email="surya.munna95@gmail.com"`.
 2. **Quality gates before every push:** `cd core && python -m pytest tests/ -q`
-   (currently 103 passed) and, if `shell/` was touched,
-   `cd shell && npx tsc --noEmit && npx vitest run && npx vite build` (6 tests).
+   (currently 112 passed) and, if `shell/` was touched,
+   `cd shell && npx tsc --noEmit && npx vitest run && npx vite build` (9 tests).
 3. **Be honest** in README/docs/reports about sandbox-verified vs
    needs-local-build (Tauri binary, real opencode binary, systemd/Caddy on a VM).
    Never claim something is tested when it isn't. The owner checks.
@@ -32,10 +32,18 @@ right context before I have to ask." One memory across all clients
       240-char. Tests: `test_acp_hand.py::test_transcript_event_keeps_full_text`
       (fake agent `ACP_FAKE_LONG=1`), `test_consolidation.py::TestTranscriptHints`,
       `test_centri.py::TestHands` opencode transcript tests. pytest 108/108.
-- [ ] **3b.2 Threads** — wire `thread_id` end to end: POST `/utterance`
-      accepts/creates it, `/events?thread_id=` filters, shell sidebar (list /
-      new / switch, timeline scoped). Memory stays global. Keep vitest text
-      contracts (see below).
+- [x] **3b.2 Threads** — DONE. `thread_id` wired end to end. POST `/utterance`
+      accepts an optional `thread_id` (created on first use; absent → catch-all
+      `th-default`); coordinator tags `user.utterance` + `coordinator.response`
+      with the chat thread (`Coordinator._resolve_thread`/`_default_thread`).
+      `/events?thread_id=` filters; new POST `/threads` creates an empty chat
+      thread. Shell: `ThreadSidebar` (list/new/switch), `useEventStream(threadId)`
+      resets + re-hydrates scoped on switch and filters live frames via
+      `inThread` (frames with no thread stay global). Memory stays global —
+      `/briefing` and `/memory/graph` are unscoped. Tests:
+      `test_centri.py::TestThreads` (default-thread tag, explicit create-on-first-use,
+      disjoint A/B chat, POST /threads); `ThreadSidebar.test.tsx`.
+      pytest 112/112, vitest 9/9, tsc/build clean.
 - [ ] **3b.3 OpenCode ingestion adapter** — incremental, idempotent tail of an
       external `opencode.db` into `ingest.opencode.message` events (high-water
       mark per source; redaction via existing seam). Fixture DB in tests.
@@ -52,8 +60,8 @@ right context before I have to ask." One memory across all clients
 - **Done & pushed:** Phases 0–2 (event spine, ACP+OpenCode hands, memory graph
   w/ typed supersession, consolidation worker, cue-driven briefs, centri-bench
   native 1.00 vs Letta 0.93), shell UI v2 + glassmorphism, Phase 3a auth+deploy
-  (`6e4bb2c`), 3b.1 full hand transcripts. pytest 108/108, vitest 6/6,
-  tsc/build clean.
+  (`6e4bb2c`), 3b.1 full hand transcripts, 3b.2 threads (chat-scoped timeline,
+  global memory). pytest 112/112, vitest 9/9, tsc/build clean.
 - **Layout:** `core/` Python FastAPI (src/centri/: app.py, db.py, coordinator,
   consolidation, memory_graph, memory_brief, briefing, hands/, bench/);
   `shell/` React+TS+Tailwind (+ Tauri scaffold); `deploy/` VM bundle;
@@ -79,6 +87,11 @@ right context before I have to ask." One memory across all clients
   (`rebuild_from_events()`); redaction before persistence.
 - Approval routes are idempotent; resolved decision lives in `payload.decision`
   AND `action`.
+- Threads scope the *chat timeline only* — `/briefing` and `/memory/graph` must
+  stay unscoped (one memory across all threads). `user.utterance` /
+  `coordinator.response` carry `thread_id`; the shell shows frames matching the
+  active thread plus any frame with no `thread_id` (global). Coding tasks still
+  spin their own work-thread per task — separate from the chat thread.
 
 ## Known traps
 

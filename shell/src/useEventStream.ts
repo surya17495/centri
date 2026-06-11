@@ -179,7 +179,16 @@ export interface EventStream {
   resolveApproval: (approvalId: string, decision: "approve" | "reject") => Promise<void>;
 }
 
-export function useEventStream(): EventStream {
+// A live or replayed frame belongs in the active thread's timeline when it
+// carries that thread_id, or when it has no thread at all (global events like
+// narration, status, context updates) so cross-cutting cards aren't lost.
+function inThread(ev: CentriEvent, threadId: string | null): boolean {
+  if (!threadId) return true;
+  const evThread = (ev.thread_id ?? (ev.payload?.thread_id as string)) || null;
+  return evThread === null || evThread === threadId;
+}
+
+export function useEventStream(threadId: string | null = null): EventStream {
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [version, setVersion] = useState(0);
   const [status, setStatus] = useState<StatusResponse | null>(null);
@@ -190,11 +199,14 @@ export function useEventStream(): EventStream {
   const backoffRef = useRef(BASE_BACKOFF_MS);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closedRef = useRef(false);
+  // Read the active thread inside callbacks without re-creating the socket.
+  const threadRef = useRef<string | null>(threadId);
 
   const bump = useCallback(() => setVersion((v) => v + 1), []);
 
   const ingest = useCallback(
     (ev: CentriEvent) => {
+      if (!inThread(ev, threadRef.current)) return;
       applyEvent(stateRef.current, ev, counterRef.current++);
       bump();
     },
@@ -246,7 +258,7 @@ export function useEventStream(): EventStream {
       refreshStatus();
       // Hydrate recent history so a fresh connection isn't blank.
       api
-        .recentEvents(100)
+        .recentEvents(100, threadRef.current)
         .then((res) => {
           // /events returns newest-first; replay oldest-first so the
           // timeline reads chronologically.
@@ -300,6 +312,28 @@ export function useEventStream(): EventStream {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Switching threads scopes the timeline: drop the current aggregate and
+  // re-hydrate from the server filtered to the new thread. The WS stays open;
+  // live frames are filtered by `inThread` going forward.
+  useEffect(() => {
+    threadRef.current = threadId;
+    stateRef.current = emptyState();
+    counterRef.current = 0;
+    bump();
+    api
+      .recentEvents(100, threadId)
+      .then((res) => {
+        for (const raw of [...res.events].reverse()) {
+          applyEvent(stateRef.current, raw as CentriEvent, counterRef.current++);
+        }
+        bump();
+      })
+      .catch(() => {
+        /* history is best-effort */
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId]);
 
   const resolveApproval = useCallback(
     async (approvalId: string, decision: "approve" | "reject") => {

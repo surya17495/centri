@@ -33,6 +33,12 @@ class _FakeDB:
     async def create_thread(self, **kw):
         return None
 
+    async def get_thread(self, *args, **kw):
+        return None
+
+    async def update_thread(self, *args, **kw):
+        return None
+
     async def create_task(self, **kw):
         return None
 

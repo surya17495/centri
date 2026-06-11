@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { api } from "../api";
 
-export function CommandBar() {
+export function CommandBar({
+  threadId = null,
+  onSent,
+}: {
+  threadId?: string | null;
+  onSent?: () => void;
+} = {}) {
   const [text, setText] = useState("");
   const [inFlight, setInFlight] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -26,8 +32,9 @@ export function CommandBar() {
     setInFlight(true);
     setError(null);
     try {
-      await api.utterance(trimmed);
+      await api.utterance(trimmed, threadId);
       setText("");
+      onSent?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to send");
     } finally {

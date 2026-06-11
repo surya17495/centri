@@ -1,4 +1,4 @@
-import type { StatusResponse, UtteranceResponse } from "./types";
+import type { StatusResponse, Thread, UtteranceResponse } from "./types";
 
 const STORAGE_KEY = "centri.backendUrl";
 const TOKEN_KEY = "centri.authToken";
@@ -66,10 +66,23 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   status: () => req<StatusResponse>("/status"),
 
-  utterance: (text: string) =>
+  utterance: (text: string, threadId?: string | null) =>
     req<UtteranceResponse>("/utterance", {
       method: "POST",
-      body: JSON.stringify({ text, user_id: "local", source: "desktop_text" }),
+      body: JSON.stringify({
+        text,
+        user_id: "local",
+        source: "desktop_text",
+        ...(threadId ? { thread_id: threadId } : {}),
+      }),
+    }),
+
+  threads: () => req<{ threads: Thread[] }>("/threads"),
+
+  createThread: (title?: string) =>
+    req<{ thread: Thread }>("/threads", {
+      method: "POST",
+      body: JSON.stringify({ title: title ?? "New chat" }),
     }),
 
   approve: (approvalId: string) =>
@@ -81,8 +94,10 @@ export const api = {
   cancelTask: (taskId: string) =>
     req<Record<string, unknown>>(`/tasks/${taskId}/cancel`, { method: "POST" }),
 
-  recentEvents: (limit = 50) =>
-    req<{ events: unknown[] }>(`/events?limit=${limit}`),
+  recentEvents: (limit = 50, threadId?: string | null) =>
+    req<{ events: unknown[] }>(
+      `/events?limit=${limit}${threadId ? `&thread_id=${encodeURIComponent(threadId)}` : ""}`,
+    ),
 
   connectAccount: (provider: string, apiKey: string) =>
     req<Record<string, unknown>>(`/accounts/${provider}/connect`, {
