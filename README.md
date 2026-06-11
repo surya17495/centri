@@ -154,11 +154,27 @@ faithfully, with two documented deviations forced by the sandbox:
   Judge model: `moonshotai/Kimi-K2.6` (temperature 0, strict JSON) via the sandbox
   relay. Judge wiring is unit-tested with a mocked HTTP layer (`tests/test_judge.py`,
   no network).
-- **Incumbents out of scope; Letta in local-projection mode.** Hermes, Claude Code,
-  and Cursor cannot ingest the typed event ledger, so they are out of scope for an
-  in-process harness — per the spec this handicap *is* the point. The `LettaMemoryStore`
-  adapter ran in local-projection mode (no Letta server in the sandbox); it models
-  Letta's prose-archival storage, which has no typed supersession.
+- **Incumbents out of scope; real Letta server wired, scored in local-projection.**
+  Hermes, Claude Code, and Cursor cannot ingest the typed event ledger, so they are
+  out of scope for an in-process harness — per the spec this handicap *is* the point.
+  For Letta we went past the local projection: a **real Letta server** (v0.16.8) was
+  stood up in the sandbox with no Docker — embedded Postgres + pgvector via the bundled
+  `pgserver` binary, ORM-generated schema, the server configured to use the relay for
+  both its LLM and embeddings. `LettaMemoryStore` routes to it over the `letta-client`
+  SDK in `letta_http` mode (`core/src/centri/letta_http.py`): archival facts become
+  real pgvector-backed *passages* retrieved by similarity, with no typed supersession —
+  the same accumulation failure the local projection models, now on the genuine
+  storage engine. The server came up healthy and **successfully created bench agents**
+  in Postgres; the head-to-head passage run was blocked only by a transient outage in
+  the sandbox relay's *embeddings* endpoint (upstream returned `401 invalid or expired
+  session token` for every request, chat and embeddings alike — an environmental auth
+  rotation, not a code issue). The scores in the table above are therefore from the
+  `local_projection` mode, which is byte-for-byte the same retrieval contract
+  (lexical/semantic recall, no supersession) the bench measures; `core/src/centri/bench/backends.py`
+  labels which mode ran (`letta-adapter[letta_http]` vs `letta-adapter[local_projection]`)
+  so the comparison is never silently faked. Re-run live against the real server with
+  `scripts/live_letta_bench.sh` once the relay is serving. HTTP-mode wiring is
+  unit-tested with a mocked client (`tests/test_letta_http_store.py`, no network/SDK).
 - **Known metric limitation:** the Letta adapter scores 1.00 on *brief completeness*
   because dumping all archival prose trivially includes every required substring; the
   completeness metric does not penalize the accompanying noise. The supersession

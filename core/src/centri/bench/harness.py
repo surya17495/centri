@@ -133,7 +133,13 @@ def report(out: Dict[str, Any]) -> str:
     lines.append("Honest handicap note: incumbents (Hermes, Claude Code, Cursor) cannot")
     lines.append("ingest the typed event ledger, so they are out of scope for this")
     lines.append("in-process harness. Per centri-bench.md that handicap IS the point —")
-    lines.append("event-level capture is the differentiator. The Letta adapter ran in")
-    lines.append("local-projection mode (no Letta server in the sandbox); it models")
-    lines.append("Letta's prose-archival storage, which has no typed supersession.")
+    lines.append("event-level capture is the differentiator.")
+    letta_http = any("letta_http" in r.backend for r in out["results"])
+    if letta_http:
+        lines.append("The Letta adapter ran in letta_http mode against a real Letta server")
+        lines.append("(pgvector-backed archival passages); it has no typed supersession.")
+    else:
+        lines.append("The Letta adapter ran in local-projection mode (Letta server not")
+        lines.append("configured); it models Letta's prose-archival storage, which has no")
+        lines.append("typed supersession. Point CENTRI_LETTA_URL at a server for letta_http.")
     return "\n".join(lines)
