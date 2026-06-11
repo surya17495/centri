@@ -34,6 +34,7 @@ class Runtime:
         self.briefing_builder: Any = None
         self.memory_graph: Any = None
         self.consolidator: Any = None
+        self.opencode_ingestor: Any = None
         self.memory_brief: Any = None
         self.proactive_brief: Any = None
         self._background_tasks: list[asyncio.Task] = []
@@ -57,6 +58,7 @@ class Runtime:
         from centri.event_bus import EventBus
         from centri.memory_graph import MemoryGraph
         from centri.consolidation import Consolidator
+        from centri.ingest import OpenCodeIngestor
         from centri.memory_brief import MemoryBriefAssembler, ProactiveBriefBuilder
 
         settings = get_settings()
@@ -88,6 +90,7 @@ class Runtime:
         self.memory_graph = MemoryGraph(self.db)
         await self.memory_graph.ensure_tables()
         self.consolidator = Consolidator(self.db, self.memory_graph, event_bus=self.event_bus)
+        self.opencode_ingestor = OpenCodeIngestor(self.db, event_bus=self.event_bus)
         self.memory_brief = MemoryBriefAssembler(self.memory_graph)
         self.proactive_brief = ProactiveBriefBuilder(self.db, self.memory_graph)
 
@@ -106,6 +109,8 @@ class Runtime:
             consolidator=self.consolidator,
             memory_graph=self.memory_graph,
             event_bus=self.event_bus,
+            ingestor=self.opencode_ingestor,
+            ingest_db_path=settings.opencode_ingest_db,
         )
 
         # 10. Model router

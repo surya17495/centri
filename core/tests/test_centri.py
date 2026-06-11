@@ -199,6 +199,56 @@ class TestThreads:
             assert created["id"] in ids
 
 
+class TestIngest:
+    """Phase 3b.3: POST /ingest/opencode tails an external opencode.db once,
+    idempotently, into the spine."""
+
+    def _make_db(self, path, rows):
+        import sqlite3
+        conn = sqlite3.connect(str(path))
+        conn.execute(
+            "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, created_at TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO message (id,session_id,role,content,created_at) VALUES (?,?,?,?,?)",
+            rows,
+        )
+        conn.commit()
+        conn.close()
+
+    async def test_ingest_endpoint_idempotent(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        oc = Path(tempfile.mkdtemp()) / "opencode.db"
+        # Unique source + id + a future-dated ts so the event is findable at the
+        # top of the (shared dev DB) timeline regardless of prior pollution.
+        import uuid
+        src = f"ep-{uuid.uuid4().hex[:8]}"
+        mid = f"m-{uuid.uuid4().hex[:8]}"
+        # Timestamp = now so the event lands at the top of the (shared dev DB)
+        # timeline without leaving a far-future artifact behind.
+        self._make_db(oc, [
+            (mid, "s1", "assistant", "ingested via endpoint", _now()),
+        ])
+        with TestClient(app) as client:
+            first = client.post("/ingest/opencode", json={"db_path": str(oc), "source": src}).json()
+            assert first["ingested"] == 1 and first["available"] is True
+            # Re-run: idempotent, no new events.
+            second = client.post("/ingest/opencode", json={"db_path": str(oc), "source": src}).json()
+            assert second["ingested"] == 0
+            events = client.get("/events?limit=20").json()["events"]
+            ingested = [e for e in events if e["type"] == "ingest.opencode.message" and e["id"].endswith(mid)]
+            assert len(ingested) == 1
+            assert ingested[0]["payload"]["tool"] == "opencode"
+
+    async def test_ingest_endpoint_requires_path(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            r = client.post("/ingest/opencode", json={})
+            assert r.status_code == 400
+
+
 class TestAuth:
     """Phase 3a: shared-secret bearer auth for VM deployment.
 

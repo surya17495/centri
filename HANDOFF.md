@@ -64,9 +64,25 @@ Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
       `test_centri.py::TestThreads` (default-thread tag, explicit create-on-first-use,
       disjoint A/B chat, POST /threads); `ThreadSidebar.test.tsx`.
       pytest 112/112, vitest 9/9, tsc/build clean.
-- [ ] **3b.3 OpenCode ingestion adapter** — incremental, idempotent tail of an
-      external `opencode.db` into `ingest.opencode.message` events (high-water
-      mark per source; redaction via existing seam). Fixture DB in tests.
+- [x] **3b.3 OpenCode ingestion adapter** — DONE (2026-06-11). Incremental,
+      idempotent tail of an external `opencode.db` into `ingest.opencode.message`
+      events. `centri.ingest.OpenCodeIngestor` opens the external DB read-only,
+      tolerates column-name variants (id/session/role/content/ts, JSON "parts"
+      flattened), normalizes each message to an event (`importance="low"`,
+      `source="ingest.opencode"`), and writes via `db.append_event` so the
+      redaction seam scrubs secrets. Idempotency = deterministic event id
+      (`ingest:<source>:<external_id>` + `event_exists` guard) plus a persisted
+      per-source high-water mark (`ingest_state` table, cursor `"ts|id"`).
+      Assistant/tool messages carry a `fact` hint (`topic:
+      opencode-session:<sid>`, tags `[ingest, opencode, transcript]`) that
+      consolidation folds → surfaces in briefs; user prompts are captured but
+      not folded (no confabulation). Scheduler `run_ingestion()` tails
+      `CENTRI_OPENCODE_INGEST_DB` before consolidation each tick; POST
+      `/ingest/opencode` does a one-shot ingest. Tests:
+      `test_ingest_opencode.py` (11: idempotent re-run, incremental, per-source
+      HWM, redaction, brief-surfacing, schema tolerance, missing-db, helper) +
+      `test_centri.py::TestIngest` (2: endpoint idempotent, requires path).
+      pytest 125/125.
 - [ ] **3d.1 Open-loop scheduler** — scheduler tick scans open loops, emits
       one-time `loop.nudge` events per policy window; surfaces in `/briefing`.
 - [ ] **3c.1 Tiered consolidation** — daily/weekly digests + entity pages;
@@ -81,9 +97,13 @@ Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
   w/ typed supersession, consolidation worker, cue-driven briefs, centri-bench
   native 1.00 vs Letta 0.93), shell UI v2 + glassmorphism, Phase 3a auth+deploy
   (`6e4bb2c`), 3b.1 full hand transcripts, 3b.2 threads (chat-scoped timeline,
-  global memory). pytest 112/112, vitest 9/9, tsc/build clean.
+  global memory), 3b.3 OpenCode ingestion adapter. Decisions ratified
+  (shared-core continuity, OpenCode-via-ACP default, deterministic memory) —
+  see `docs/ROADMAP.md` → "Decisions". pytest 125/125, vitest 9/9,
+  tsc/build clean.
+- **Next:** 3d.1 open-loop scheduler (per the work queue order below).
 - **Layout:** `core/` Python FastAPI (src/centri/: app.py, db.py, coordinator,
-  consolidation, memory_graph, memory_brief, briefing, hands/, bench/);
+  consolidation, memory_graph, memory_brief, briefing, hands/, ingest/, bench/);
   `shell/` React+TS+Tailwind (+ Tauri scaffold); `deploy/` VM bundle;
   `docs/` architecture/roadmap/memory/bench/event-contract.
 - **Run locally (sandbox):** backend

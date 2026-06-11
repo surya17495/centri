@@ -71,6 +71,7 @@ are masked in free text.
 | `artifact.created`           | jobs          |
 | `memory.synthesized`         | memory        |
 | `notification.sent`          | runtime       |
+| `ingest.opencode.message`    | ingest.opencode |
 | `hand.started`               | hand          |
 | `hand.progress`              | hand          |
 | `hand.blocked`               | hand          |

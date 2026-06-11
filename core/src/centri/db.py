@@ -105,6 +105,13 @@ CREATE TABLE IF NOT EXISTS identity_cache (
     human TEXT DEFAULT '',
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS ingest_state (
+    source TEXT PRIMARY KEY,
+    high_water TEXT NOT NULL DEFAULT '',
+    last_run_at TEXT,
+    ingested_count INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -313,6 +320,37 @@ class Database:
         cur = await self._execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
         row = cur.fetchone()
         return dict(row) if row else None
+
+    async def event_exists(self, event_id: str) -> bool:
+        cur = await self._execute("SELECT 1 FROM events WHERE id = ? LIMIT 1", (event_id,))
+        return cur.fetchone() is not None
+
+    # ingest_state — per-source high-water mark for external store tailing (3b.3)
+    async def get_ingest_state(self, source: str) -> Optional[Dict[str, Any]]:
+        cur = await self._execute("SELECT * FROM ingest_state WHERE source = ?", (source,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    async def get_ingest_high_water(self, source: str) -> str:
+        state = await self.get_ingest_state(source)
+        return state["high_water"] if state else ""
+
+    async def set_ingest_high_water(
+        self,
+        source: str,
+        high_water: str,
+        last_run_at: Optional[str] = None,
+        ingested_delta: int = 0,
+    ) -> None:
+        await self._execute(
+            """INSERT INTO ingest_state (source, high_water, last_run_at, ingested_count)
+                VALUES (?,?,?,?)
+                ON CONFLICT(source) DO UPDATE SET
+                  high_water=excluded.high_water,
+                  last_run_at=excluded.last_run_at,
+                  ingested_count=ingest_state.ingested_count + excluded.ingested_count""",
+            (source, high_water, last_run_at, ingested_delta),
+        )
 
     # Shutdown hook
     async def close(self) -> None:

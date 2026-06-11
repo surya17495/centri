@@ -35,6 +35,14 @@ class CreateThreadRequest(BaseModel):
     goal: str = ""
 
 
+class IngestOpenCodeRequest(BaseModel):
+    # Path to the external opencode.db to tail. Defaults to the configured
+    # CENTRI_OPENCODE_INGEST_DB when omitted.
+    db_path: str | None = None
+    source: str | None = None
+    repo_id: str | None = None
+
+
 class ContextRequest(BaseModel):
     surface: str | None = None
     title: str | None = None
@@ -313,6 +321,25 @@ async def create_thread(req: CreateThreadRequest) -> Dict[str, Any]:
         updated_at=ts,
     )
     return {"thread": await runtime.db.get_thread(thread_id)}
+
+
+@app.post("/ingest/opencode")
+async def ingest_opencode(req: IngestOpenCodeRequest) -> Dict[str, Any]:
+    """One-shot, idempotent tail of an external opencode.db into the spine (3b.3).
+
+    Re-running over the same store produces no duplicate events (deterministic
+    event ids + persisted per-source high-water mark). Ingested events are
+    digested by consolidation like native events on the next scheduler tick.
+    """
+    if runtime.opencode_ingestor is None:
+        return {"available": False, "reason": "ingestion subsystem not booted"}
+    db_path = req.db_path or get_settings().opencode_ingest_db
+    if not db_path:
+        raise HTTPException(status_code=400, detail="no db_path supplied and CENTRI_OPENCODE_INGEST_DB unset")
+    result = await runtime.opencode_ingestor.ingest(
+        db_path, source=req.source, repo_id=req.repo_id
+    )
+    return result
 
 
 def _normalize_event_row(row: Dict[str, Any]) -> Dict[str, Any]:

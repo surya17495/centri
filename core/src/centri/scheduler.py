@@ -38,6 +38,8 @@ class Scheduler:
         memory_graph: Any = None,
         event_bus: Any = None,
         dormancy_days: float = 7.0,
+        ingestor: Any = None,
+        ingest_db_path: str = "",
     ):
         self._db = db
         self._jobs = jobs
@@ -47,6 +49,8 @@ class Scheduler:
         self._graph = memory_graph
         self._event_bus = event_bus
         self._dormancy_days = dormancy_days
+        self._ingestor = ingestor
+        self._ingest_db_path = ingest_db_path
         self._task: Optional[asyncio.Task] = None
         self._interval = 30.0
         # High-water mark: only consolidate events newer than this timestamp.
@@ -78,6 +82,9 @@ class Scheduler:
     async def _tick(self) -> None:
         # Poll running jobs
         await self._jobs.poll_once()
+        # Ingestion adapters — tail external session stores into the spine
+        # before consolidation so ingested events fold in the same pass.
+        await self.run_ingestion()
         # Consolidation ("sleep cycle") — fold new events into typed memory.
         await self.run_consolidation()
         # Dormancy detection — surface stale open loops once.
@@ -87,6 +94,25 @@ class Scheduler:
             self._db, self._memory, type("mock", (), {"health": lambda: []})(), self._jobs, self
         )
         logger.debug("Health: db=%s memory=%s jobs=%s", health.db, health.memory, health.jobs)
+
+    # ------------------------------------------------------------------
+    # Ingestion (3b.3)
+    # ------------------------------------------------------------------
+    async def run_ingestion(self) -> int:
+        """Tail the configured external opencode.db into the spine.
+
+        Idempotent and incremental (the ingestor keeps a per-source high-water
+        mark), so calling it every tick is cheap and never duplicates events.
+        Returns the count ingested this pass.
+        """
+        if self._ingestor is None or not self._ingest_db_path:
+            return 0
+        try:
+            result = await self._ingestor.ingest(self._ingest_db_path)
+            return int(result.get("ingested", 0))
+        except Exception:
+            logger.debug("Ingestion pass failed", exc_info=True)
+            return 0
 
     # ------------------------------------------------------------------
     # Consolidation

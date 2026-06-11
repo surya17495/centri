@@ -64,6 +64,11 @@ class Settings:
     # OpenCode hand (CLI-based, no sidecar needed)
     opencode_cli: str = "opencode"
 
+    # OpenCode ingestion adapter (3b.3): path to an external opencode.db to tail
+    # into the spine on each scheduler tick. Empty (default) = no ambient tail;
+    # the POST /ingest/opencode endpoint still works for one-shot ingests.
+    opencode_ingest_db: str = ""
+
     # ACP hand — command that launches an Agent Client Protocol agent over stdio.
     # Every hand is uniformly "an ACP agent identified by a launch command";
     # Cursor / Claude Code / etc. are just different values here, not new code.
@@ -133,6 +138,7 @@ class Settings:
             letta_embedding_endpoint=os.getenv("CENTRI_LETTA_EMBEDDING_ENDPOINT", "http://127.0.0.1:8901/v1"),
             letta_embedding_dim=int(os.getenv("CENTRI_LETTA_EMBEDDING_DIM", "4096")),
             opencode_cli=os.getenv("OPENCODE_CLI", "opencode"),
+            opencode_ingest_db=os.getenv("CENTRI_OPENCODE_INGEST_DB", ""),
             acp_command=os.getenv("CENTRI_ACP_COMMAND", "opencode acp"),
             acp_opencode_command=os.getenv("CENTRI_ACP_OPENCODE_COMMAND", "opencode acp"),
             enabled_hands=enabled_hands,
