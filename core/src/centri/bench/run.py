@@ -1,14 +1,29 @@
-"""centri-bench CLI entrypoint: ``python -m centri.bench.run``."""
+"""centri-bench CLI entrypoint: ``python -m centri.bench.run``.
+
+Flags:
+  --json    machine-readable scores
+  --judge   grade with the LLM judge (CENTRI_JUDGE_* env) instead of the
+            deterministic rubric. The judge is installed via set_judge() so the
+            harness path is identical; only the grader differs.
+"""
 
 import asyncio
 import json
 import sys
 
 from centri.bench.harness import report, run
+from centri.bench.scoring import set_judge
 
 
 def main() -> None:
-    out = asyncio.run(run())
+    if "--judge" in sys.argv:
+        from centri.bench.judge import make_judge
+
+        set_judge(make_judge())
+    try:
+        out = asyncio.run(run())
+    finally:
+        set_judge(None)
     if "--json" in sys.argv:
         payload = {
             "personas": out["personas"],
