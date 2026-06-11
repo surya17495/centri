@@ -63,6 +63,9 @@ async def _run_backend(backend: Any, personas: List[Persona]) -> BackendResult:
         brief = await backend.brief(persona.cue, persona.repo_id)
         res.scores.append(score(persona, brief))
         await backend.close()
+    # Re-read the label after ingest: the Letta backend only knows its mode
+    # (letta_http vs local_projection) once the store is constructed.
+    res.backend = backend.name
     res.dormancy_ok = await _dormancy_probe()
     return res
 

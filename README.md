@@ -106,9 +106,9 @@ in the sandbox — namely Rust/cargo for the Tauri desktop binary).
   (`GET /briefing`) and memory inspection (`GET /memory/graph`); scheduler dormancy
   detection (one yes/no line per dormant loop, surfaced once). Falsifiable via
   `centri-bench` (`python -m centri.bench.run`): native CENTRI scores **1.00**
-  composite vs the Letta-style prose-archival adapter at **0.93**, with the gap on
-  stale-fact supersession (native 1.00 vs Letta 0.67) — the central thesis. See the
-  honest accounting below.
+  composite vs a **real Letta server** (pgvector archival, `letta_http` mode) at
+  **0.93**, with the gap on stale-fact supersession (native 1.00 vs Letta 0.67) — the
+  central thesis. See the honest accounting below.
 - **Sandbox-verified (shell frontend):** the React app in `shell/` builds and
   typechecks (`tsc --noEmit` + `vite build`) and runs in a plain browser via
   `npm run dev` — activity timeline, streaming task cards, inline approval cards,
@@ -137,11 +137,11 @@ faithfully, with two documented deviations forced by the sandbox:
   remains the default and the offline cross-check: it grades the same *structured*
   ground truth (exact rejected approaches, required brief substrings, stale/current
   pairs, the next step) authored in `bench/personas.py` *before* the implementation.
-  Run head-to-head, **both graders agree**: native composite **1.00** vs Letta-style
-  prose-archival **0.93**, with the gap on stale-fact supersession (native 1.00 vs
-  Letta 0.67). The judge reproducing the rubric independently is the point — the
-  deterministic rubric is not a softer test, it is the judge's checklist made
-  executable.
+  Run head-to-head against a **real Letta server** (`letta_http` mode, see the next
+  bullet), **both graders agree**: native composite **1.00** vs Letta **0.93**, with
+  the gap on stale-fact supersession (native 1.00 vs Letta 0.67). The judge
+  reproducing the rubric independently is the point — the deterministic rubric is not
+  a softer test, it is the judge's checklist made executable.
 
   | Metric (avg over 3 personas) | native (det.) | native (judge) | Letta (det.) | Letta (judge) |
   |------------------------------|:-------------:|:--------------:|:------------:|:-------------:|
@@ -154,27 +154,28 @@ faithfully, with two documented deviations forced by the sandbox:
   Judge model: `moonshotai/Kimi-K2.6` (temperature 0, strict JSON) via the sandbox
   relay. Judge wiring is unit-tested with a mocked HTTP layer (`tests/test_judge.py`,
   no network).
-- **Incumbents out of scope; real Letta server wired, scored in local-projection.**
-  Hermes, Claude Code, and Cursor cannot ingest the typed event ledger, so they are
-  out of scope for an in-process harness — per the spec this handicap *is* the point.
-  For Letta we went past the local projection: a **real Letta server** (v0.16.8) was
-  stood up in the sandbox with no Docker — embedded Postgres + pgvector via the bundled
-  `pgserver` binary, ORM-generated schema, the server configured to use the relay for
-  both its LLM and embeddings. `LettaMemoryStore` routes to it over the `letta-client`
-  SDK in `letta_http` mode (`core/src/centri/letta_http.py`): archival facts become
-  real pgvector-backed *passages* retrieved by similarity, with no typed supersession —
-  the same accumulation failure the local projection models, now on the genuine
-  storage engine. The server came up healthy and **successfully created bench agents**
-  in Postgres; the head-to-head passage run was blocked only by a transient outage in
-  the sandbox relay's *embeddings* endpoint (upstream returned `401 invalid or expired
-  session token` for every request, chat and embeddings alike — an environmental auth
-  rotation, not a code issue). The scores in the table above are therefore from the
-  `local_projection` mode, which is byte-for-byte the same retrieval contract
-  (lexical/semantic recall, no supersession) the bench measures; `core/src/centri/bench/backends.py`
-  labels which mode ran (`letta-adapter[letta_http]` vs `letta-adapter[local_projection]`)
-  so the comparison is never silently faked. Re-run live against the real server with
-  `scripts/live_letta_bench.sh` once the relay is serving. HTTP-mode wiring is
-  unit-tested with a mocked client (`tests/test_letta_http_store.py`, no network/SDK).
+- **Incumbents out of scope; Letta scored against a real Letta server.** Hermes,
+  Claude Code, and Cursor cannot ingest the typed event ledger, so they are out of
+  scope for an in-process harness — per the spec this handicap *is* the point. For
+  Letta we went past a local model and ran the head-to-head against a **real Letta
+  server** (v0.16.8), stood up in the sandbox with no Docker: embedded Postgres +
+  pgvector via the bundled `pgserver` binary, ORM-generated schema, the server
+  configured to use the relay for both its LLM and embeddings. `LettaMemoryStore`
+  routes to it over the `letta-client` SDK in `letta_http` mode
+  (`core/src/centri/letta_http.py`): archival facts become real pgvector-backed
+  *passages* retrieved by similarity, with no typed supersession. **The table above is
+  the `letta_http` result** — native composite **1.00** vs the real Letta server's
+  **0.93**, the gap entirely on stale-fact supersession (1.00 vs 0.67): on the webapp
+  persona's `authsvc -> identity-gateway` rename, semantic passage retrieval returns
+  *both* the stale and current note, exactly the accumulation failure CENTRI's typed
+  graph avoids. Both graders (deterministic + LLM judge) agree on the genuine engine.
+  `core/src/centri/bench/backends.py` labels which mode ran
+  (`letta-adapter[letta_http]` vs `letta-adapter[local_projection]`) so the comparison
+  is never silently faked; with no server configured the adapter degrades to a
+  `local_projection` (lexical recall, same no-supersession contract) and says so.
+  Re-run the live head-to-head with `scripts/live_letta_bench.sh` (set
+  `CENTRI_LETTA_URL`). HTTP-mode wiring is also unit-tested with a mocked client
+  (`tests/test_letta_http_store.py`, no network/SDK).
 - **Known metric limitation:** the Letta adapter scores 1.00 on *brief completeness*
   because dumping all archival prose trivially includes every required substring; the
   completeness metric does not penalize the accompanying noise. The supersession
