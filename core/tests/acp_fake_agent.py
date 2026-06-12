@@ -14,6 +14,7 @@ Behavior is controlled by env vars so one script covers every test scenario:
 import json
 import os
 import sys
+import time
 
 MODE = os.environ.get("ACP_FAKE_MODE", "stream")
 
@@ -139,6 +140,92 @@ def main():
         elif method == "session/new":
             reply(msg_id, {"sessionId": session_id})
         elif method == "session/prompt":
+            # --- Adversarial / error-path modes (Piece A2) ---
+            if MODE == "malformed":
+                # Emit a non-JSON-RPC frame on the wire, then a valid turn. The
+                # client's reader must skip the garbage line and still complete.
+                sys.stdout.write("this is not json-rpc {{{\n")
+                sys.stdout.flush()
+                stream_updates(session_id)
+                reply(msg_id, {"stopReason": "end_turn"})
+                continue
+            if MODE == "crash":
+                # Stream one chunk, then die mid-turn without ever replying to
+                # the prompt. The client must observe the stream close and fail
+                # honestly (not hang waiting for a stopReason).
+                notify("session/update", {
+                    "sessionId": session_id,
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "messageId": "m1",
+                        "content": {"type": "text", "text": "Half a thought"},
+                    },
+                })
+                sys.stdout.flush()
+                os._exit(1)
+            if MODE == "hang":
+                # Stream a chunk then go silent forever: never reply to the
+                # prompt and never close. The client's prompt timeout must fire.
+                notify("session/update", {
+                    "sessionId": session_id,
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "messageId": "m1",
+                        "content": {"type": "text", "text": "thinking"},
+                    },
+                })
+                while True:
+                    time.sleep(3600)
+            if MODE == "oversized":
+                # A single multi-megabyte chunk: the client must ingest it
+                # without choking and keep the full text on the transcript.
+                big = "X" * (2 * 1024 * 1024)
+                notify("session/update", {
+                    "sessionId": session_id,
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "messageId": "m_big",
+                        "content": {"type": "text", "text": big},
+                    },
+                })
+                reply(msg_id, {"stopReason": "end_turn"})
+                continue
+            if MODE == "permission_timeout":
+                # Request permission and then block on the client's answer; the
+                # client's approval gate will time out and deny. We honor the
+                # selected/cancelled outcome and end honestly.
+                request(next_outgoing_id, "session/request_permission", {
+                    "sessionId": session_id,
+                    "toolCall": {"toolCallId": "call_slow", "title": "rm -rf build", "kind": "execute"},
+                    "options": [
+                        {"optionId": "allow-once", "name": "Allow", "kind": "allow_once"},
+                        {"optionId": "reject-once", "name": "Reject", "kind": "reject_once"},
+                    ],
+                })
+                perm_id = next_outgoing_id
+                next_outgoing_id += 1
+                while True:
+                    resp = read_msg()
+                    if resp is None:
+                        return
+                    if resp.get("id") == perm_id:
+                        reply(msg_id, {"stopReason": "end_turn"})
+                        break
+                    if resp.get("method") == "session/cancel":
+                        reply(msg_id, {"stopReason": "cancelled"})
+                        break
+                continue
+            if MODE == "cancel_stream":
+                # Stream chunks, then wait for a cancel arriving mid-stream.
+                stream_updates(session_id)
+                while True:
+                    resp = read_msg()
+                    if resp is None:
+                        return
+                    if resp.get("method") == "session/cancel":
+                        reply(msg_id, {"stopReason": "cancelled"})
+                        break
+                continue
             stream_updates(session_id)
             if MODE == "permission":
                 # Ask the client for permission and wait for the response.

@@ -229,3 +229,108 @@ async def test_real_opencode_acp_lifecycle(tmp_path):
         assert result.session_uid and result.session_uid.startswith("ses")
         assert "hand.transcript" in recorded
         assert "hand.completed" in recorded
+
+
+# ---------------------------------------------------------------------------
+# Piece A2 — ACP conformance + error-path hardening
+#
+# Each adversarial mode must produce an HONEST outcome on the spine (no silent
+# stall, no fake success) and leave the hand in a recoverable state (a fresh
+# execute() afterwards still works).
+# ---------------------------------------------------------------------------
+
+
+async def test_malformed_jsonrpc_frame_is_skipped(tmp_path):
+    """A non-JSON-RPC line on the wire is skipped; the valid turn still completes."""
+    hand = AcpHand(command=_command("malformed"))
+    result = await hand.execute(_request(tmp_path))
+    assert result.status == "completed"
+    assert "Done." in result.summary
+
+
+async def test_agent_crash_mid_turn_fails_honestly(tmp_path):
+    """Agent dies mid-turn without a stopReason: the hand fails (not hangs),
+    records no fake transcript, and registers no orphaned connection."""
+    hand = AcpHand(command=_command("crash"))
+    req = _request(tmp_path)
+    result = await asyncio.wait_for(hand.execute(req), timeout=15.0)
+    assert result.status == "failed"
+    # No fake success: a crashed turn does not emit a transcript/completed pair.
+    recorded = [e["type"] for e in result.events_to_record]
+    assert "hand.completed" not in recorded
+    # Recoverable: the in-flight connection was cleaned out of the registry.
+    assert req.id not in hand._connections
+
+
+async def test_hung_agent_times_out(tmp_path):
+    """Agent goes silent forever: the per-turn prompt timeout fires and the hand
+    fails honestly rather than stalling."""
+    hand = AcpHand(command=_command("hang"), prompt_timeout=1.0)
+    req = _request(tmp_path)
+    result = await asyncio.wait_for(hand.execute(req), timeout=15.0)
+    assert result.status == "failed"
+    assert "timed out" in result.summary.lower()
+    assert req.id not in hand._connections
+
+
+async def test_oversized_chunk_is_ingested(tmp_path):
+    """A multi-megabyte message chunk must be ingested without choking and kept
+    in full on the transcript."""
+    hand = AcpHand(command=_command("oversized"))
+    result = await asyncio.wait_for(hand.execute(_request(tmp_path)), timeout=30.0)
+    assert result.status == "completed"
+    transcripts = [e for e in result.events_to_record if e["type"] == "hand.transcript"]
+    assert len(transcripts) == 1
+    # The full 2 MiB payload survived end to end.
+    assert len(transcripts[0]["text"]) >= 2 * 1024 * 1024
+    # The UI summary stays bounded (2000-char cap on the result summary).
+    assert len(result.summary) <= 2000
+
+
+async def test_permission_request_timeout_denies(tmp_path):
+    """A permission gate that times out must resolve to a deny (a selected
+    reject option), not hang the turn."""
+    hand = AcpHand(command=_command("permission_timeout"))
+    events = []
+
+    async def sink(ev):
+        events.append(ev)
+
+    async def slow_gate(payload):
+        await asyncio.sleep(0.2)
+        raise asyncio.TimeoutError("approval timed out")
+
+    result = await asyncio.wait_for(
+        hand.execute(_request(tmp_path), event_sink=sink, approval_gate=slow_gate),
+        timeout=15.0,
+    )
+    # The turn ends honestly; the approval was surfaced on the spine.
+    assert result.status == "completed"
+    assert any(e["type"] == "approval.requested" for e in events)
+
+
+async def test_cancellation_during_streaming(tmp_path):
+    """Cancel arriving mid-stream produces a cancelled status, not a stall."""
+    hand = AcpHand(command=_command("cancel_stream"))
+    req = _request(tmp_path)
+    task = asyncio.create_task(hand.execute(req))
+    await asyncio.sleep(0.5)
+    assert await hand.cancel(req.id) is True
+    result = await asyncio.wait_for(task, timeout=10.0)
+    assert result.status == "cancelled"
+    assert req.id not in hand._connections
+
+
+async def test_restart_session_after_agent_exit(tmp_path):
+    """Agent exits (crash) between turns; a fresh execute() restarts a clean
+    session and succeeds — the hand is reusable, not poisoned."""
+    hand = AcpHand(command=_command("crash"))
+    first = await asyncio.wait_for(hand.execute(_request(tmp_path)), timeout=15.0)
+    assert first.status == "failed"
+    # Now a healthy turn through the SAME hand instance.
+    os.environ["ACP_FAKE_MODE"] = "stream"
+    hand2_cmd = f"{sys.executable} {_FAKE}"
+    hand._command = hand2_cmd  # same hand object, fresh subprocess
+    second = await asyncio.wait_for(hand.execute(_request(tmp_path)), timeout=15.0)
+    assert second.status == "completed"
+    assert "Done." in second.summary

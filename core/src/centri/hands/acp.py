@@ -39,6 +39,11 @@ logger = logging.getLogger(__name__)
 
 PROTOCOL_VERSION = 1
 _DEFAULT_TIMEOUT = 600.0
+# A single JSON-RPC frame can be large (a full file written via fs/write, a
+# multi-megabyte tool result). asyncio's StreamReader defaults to a 64 KiB line
+# limit and raises "Separator is not found, and chunk exceed the limit" past it,
+# which would break the hand on a legitimate big message. 16 MiB headroom.
+_STREAM_LIMIT = 16 * 1024 * 1024
 
 
 class AcpError(Exception):
@@ -181,9 +186,12 @@ _METHOD_NOT_FOUND = object()
 class AcpHand(Hand):
     """Real ACP client hand. Spawns an ACP agent and drives a prompt turn."""
 
-    def __init__(self, command: Optional[str] = None):
+    def __init__(self, command: Optional[str] = None, prompt_timeout: float = _DEFAULT_TIMEOUT):
         # Shell-style command to launch the agent, e.g. "opencode acp".
         self._command = command
+        # Per-turn timeout for the session/prompt call: bounds a hung agent so
+        # the hand fails honestly instead of stalling forever.
+        self._prompt_timeout = prompt_timeout
         # task_id -> live connection, so cancel() can reach an in-flight turn.
         self._connections: Dict[str, AcpConnection] = {}
 
@@ -251,6 +259,7 @@ class AcpHand(Hand):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            limit=_STREAM_LIMIT,
         )
         conn = AcpConnection(proc)
         collected: List[str] = []
@@ -353,7 +362,7 @@ class AcpHand(Hand):
             prompt_result = await conn.request("session/prompt", {
                 "sessionId": session_id,
                 "prompt": [{"type": "text", "text": request.user_intent or ""}],
-            })
+            }, timeout=self._prompt_timeout)
             stop_reason = prompt_result.get("stopReason", "end_turn")
 
             full_text = "".join(collected).strip()

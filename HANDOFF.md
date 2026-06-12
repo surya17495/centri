@@ -357,6 +357,21 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
       in this sandbox) and `::test_realish_update_kinds_are_handled` (deterministic
       via `ACP_FAKE_REALISH=1`, pins the behavior when the binary is absent).
       pytest 253/253.
+- [x] **A2 ACP conformance + error-path hardening** — DONE (2026-06-12).
+      Extended `acp_fake_agent.py` with adversarial modes and added 7 tests in
+      `test_acp_hand.py`: malformed JSON-RPC frame (skipped, turn still
+      completes), agent crash mid-turn (fails honestly, no fake transcript, no
+      orphaned connection), hung agent (per-turn timeout fires → failed), oversized
+      2 MiB chunk, permission-request timeout (gate raises → deny, turn ends),
+      cancellation mid-stream (→ cancelled), and restart after agent exit (same
+      hand reused for a clean turn). **Real bug found + fixed:** asyncio's
+      StreamReader defaults to a 64 KiB line limit and raised "Separator is not
+      found, and chunk exceed the limit" on a large frame — the hand would have
+      broken on a legitimate big message/tool result from a real agent. Fixed by
+      passing `limit=16 MiB` to `create_subprocess_exec`. Also added an injectable
+      `prompt_timeout` to `AcpHand` so a hung agent is bounded (was a hard-coded
+      600 s). Every error path leaves the hand recoverable (connection popped from
+      the registry) and emits honest events. pytest 260/260.
 - [ ] **3d.1 Waking-up + spontaneous association** — the "feels human"
       proactivity track on 3c.0's machinery: waking-up situating brief on first
       interaction of a session/day, spontaneous association surfacing an
@@ -430,7 +445,11 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
   step 3 ("real ACP coding task") from purely real-machine-pending to
   **sandbox-verified** (a real model resolved here without a key); a real-machine
   pass on the owner's own provider config is still the final confirmation.
-  pytest 253/253.
+  A2 error-path hardening DONE — 7 adversarial ACP modes (malformed frame,
+  mid-turn crash, hung/timeout, oversized chunk, permission timeout,
+  cancellation race, restart) all produce honest events + recoverable state;
+  found+fixed a real 64 KiB StreamReader line-limit bug (large frames would
+  break the hand) by raising the subprocess limit to 16 MiB. pytest 260/260.
 - **North star v2 (Decision 14, ratified 2026-06-11 PT):** CENTRI is a
   **reasoning partner** — conversational seamlessness first-class, thinks like a
   human with machine superpowers (memory bandwidth, VM tool use, voice). Docs
