@@ -314,3 +314,16 @@ curl -XPOST localhost:8760/memory/embeddings/backfill
 
 When no provider is configured these degrade honestly — the rebuild still
 succeeds, it just writes no vectors and reports `embedding:unavailable`.
+
+## License
+
+CENTRI is licensed under **FSL-1.1-Apache-2.0** (Functional Source License 1.1
+with an Apache-2.0 future grant) — see [LICENSE](LICENSE). You are free to use,
+modify, and self-host it for any purpose other than a competing commercial use.
+The competing-use restriction lapses two years after each release, at which
+point that release converts to Apache-2.0.
+
+Runtime dependencies are permissively licensed (MIT/BSD/Apache-2.0). OpenCode is
+an external MIT-licensed process that CENTRI speaks to over ACP, not a bundled
+or derivative component. `letta-client` is bench-only tooling, not a product
+dependency.
