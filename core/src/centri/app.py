@@ -358,7 +358,49 @@ async def ingest_discover() -> Dict[str, Any]:
     """
     if runtime.ingest_registry is None:
         return {"available": False, "reason": "ingestion subsystem not booted", "sources": []}
-    return runtime.ingest_registry.discover_summary()
+    summary = runtime.ingest_registry.discover_summary()
+    # Single-LLM-config (3b.5): also surface providers already configured in
+    # OpenCode so onboarding can say "your OpenCode providers are reused" without
+    # a second config step. Key material is never included — has_key only.
+    if runtime.opencode_config is not None:
+        try:
+            summary["opencode_providers"] = [
+                p.as_dict() for p in runtime.opencode_config.discovered_providers()
+            ]
+        except Exception:  # noqa: BLE001 — provider surfacing never sinks discovery
+            summary["opencode_providers"] = []
+    return summary
+
+
+@app.get("/providers/discovered")
+async def providers_discovered() -> Dict[str, Any]:
+    """Providers already configured in OpenCode, reused by CENTRI (3b.5).
+
+    Decision 5 (single LLM config): OpenCode's provider auth is the source of
+    truth, so a user never configures providers twice. This reports *which*
+    providers OpenCode has set up (and whether a key is present) — never the key
+    material itself, which only ever reaches the in-process model router.
+    """
+    if runtime.opencode_config is None:
+        return {"available": False, "reason": "opencode config reader not booted", "providers": []}
+    try:
+        providers = [p.as_dict() for p in runtime.opencode_config.discovered_providers()]
+    except Exception as exc:  # noqa: BLE001
+        return {"available": False, "reason": f"unreadable: {exc}", "providers": []}
+    return {"available": True, "providers": providers, "count": len(providers)}
+
+
+@app.get("/models/catalog")
+async def models_catalog(refresh: bool = False) -> Dict[str, Any]:
+    """models.dev model catalog for the shell's provider/model display (3b.5).
+
+    Catalog only — LiteLLM remains the transport for actual calls. On-disk cached
+    with a TTL; honest-unavailable offline with no warm cache. Not a hard
+    dependency: the rest of CENTRI runs regardless of this endpoint's result.
+    """
+    if runtime.models_catalog is None:
+        return {"available": False, "reason": "models catalog not booted"}
+    return runtime.models_catalog.get(force_refresh=refresh)
 
 
 @app.post("/ingest/bootstrap")

@@ -33,6 +33,7 @@ Design invariants:
 from centri.ingest.base import DiscoveredSource, IngestSpec, MessageAdapter
 from centri.ingest.claude_code import ClaudeCodeIngestor
 from centri.ingest.cursor import CursorIngestor
+from centri.ingest.generic import GenericAdapterConfig, GenericIngestor
 from centri.ingest.opencode import OpenCodeIngestor, ingest_opencode_db
 from centri.ingest.registry import IngestConfig, IngestRegistry
 
@@ -44,6 +45,8 @@ __all__ = [
     "ingest_opencode_db",
     "ClaudeCodeIngestor",
     "CursorIngestor",
+    "GenericIngestor",
+    "GenericAdapterConfig",
     "IngestRegistry",
     "IngestConfig",
 ]

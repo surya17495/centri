@@ -48,11 +48,24 @@ class ModelRouter:
     - embeddings: vector encoding
     """
 
-    def __init__(self):
+    def __init__(self, opencode_config: Any = None):
         settings = get_settings()
         self._settings = settings
         self._litellm_base_url = settings.litellm_base_url
         self._litellm_api_key = settings.litellm_api_key
+        # Single-LLM-config (Decision 5): OpenCode's own auth is a *fallback*
+        # source of provider keys when no CENTRI_* env key is set. Built lazily
+        # from default + configured dirs unless one is injected (tests). Env wins.
+        if opencode_config is None:
+            try:
+                from centri.opencode_config import OpenCodeConfig
+
+                extra = getattr(settings, "ingest_opencode_paths", "") or ""
+                dirs = [p.strip() for p in extra.split(",") if p.strip()]
+                opencode_config = OpenCodeConfig(extra_dirs=dirs or None)
+            except Exception:  # noqa: BLE001 — reuse is best-effort, never fatal
+                opencode_config = None
+        self._opencode_config = opencode_config
         if self._litellm_base_url:
             os.environ.setdefault("LITELLM_BASE_URL", self._litellm_base_url)
         if self._litellm_api_key:
@@ -129,11 +142,25 @@ class ModelRouter:
         return model
 
     def _provider_credentials(self, provider: str) -> tuple[Optional[str], Optional[str]]:
+        # CENTRI_* env keys always win (Decision 5: env > OpenCode auth).
         if provider == "openai":
-            return self._settings.openai_api_key or None, self._settings.openai_base_url or None
+            api_key = self._settings.openai_api_key or self._opencode_key("openai")
+            return api_key or None, self._settings.openai_base_url or None
         if provider == "nebius":
-            return self._settings.nebius_api_key or None, self._settings.nebius_base_url or None
-        return None, None
+            api_key = self._settings.nebius_api_key or self._opencode_key("nebius")
+            return api_key or None, self._settings.nebius_base_url or None
+        # Other providers: no env path here, so OpenCode auth is the only source.
+        return self._opencode_key(provider) or None, None
+
+    def _opencode_key(self, provider: str) -> Optional[str]:
+        """OpenCode-auth fallback for a provider key; honest None when absent."""
+        cfg = self._opencode_config
+        if cfg is None:
+            return None
+        try:
+            return cfg.resolve_provider_key(provider)
+        except Exception:  # noqa: BLE001 — fallback must never break resolution
+            return None
 
     def _has_supported_provider_prefix(self, model: str) -> bool:
         return model.startswith(("openai/", "nebius/"))

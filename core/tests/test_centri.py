@@ -305,6 +305,41 @@ class TestBootstrap:
             assert "ingest.bootstrap.completed" in types
 
 
+class TestSingleLlmConfig:
+    """Phase 3b.5: OpenCode provider reuse + models.dev catalog endpoints."""
+
+    async def test_providers_discovered_shape(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            body = client.get("/providers/discovered").json()
+            assert body["available"] is True
+            assert "providers" in body and "count" in body
+            assert isinstance(body["providers"], list)
+
+    async def test_discover_includes_opencode_providers(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            body = client.get("/ingest/discover").json()
+            # The single-LLM-config surface is folded into discovery.
+            assert "opencode_providers" in body
+            assert isinstance(body["opencode_providers"], list)
+
+    async def test_models_catalog_endpoint_is_not_a_hard_dependency(self):
+        # Offline in the sandbox: models.dev is unreachable, so the endpoint must
+        # answer honest-unavailable (or serve a warmed cache) — never error.
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            r = client.get("/models/catalog")
+            assert r.status_code == 200
+            body = r.json()
+            assert "available" in body
+            if not body["available"]:
+                assert "reason" in body
+
+
 class TestAuth:
     """Phase 3a: shared-secret bearer auth for VM deployment.
 

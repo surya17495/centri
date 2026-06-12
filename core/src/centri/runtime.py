@@ -36,6 +36,8 @@ class Runtime:
         self.consolidator: Any = None
         self.opencode_ingestor: Any = None
         self.ingest_registry: Any = None
+        self.opencode_config: Any = None
+        self.models_catalog: Any = None
         self.memory_brief: Any = None
         self.proactive_brief: Any = None
         self._background_tasks: list[asyncio.Task] = []
@@ -61,6 +63,8 @@ class Runtime:
         from centri.consolidation import Consolidator
         from centri.ingest import IngestConfig, IngestRegistry
         from centri.memory_brief import MemoryBriefAssembler, ProactiveBriefBuilder
+        from centri.models_catalog import ModelsCatalog
+        from centri.opencode_config import OpenCodeConfig
 
         settings = get_settings()
         logger.info("CENTRI booting...")
@@ -100,6 +104,15 @@ class Runtime:
             config=IngestConfig.from_settings(settings),
         )
         self.opencode_ingestor = self.ingest_registry.opencode
+        # Single-LLM-config (3b.5): read-only view of OpenCode's provider config
+        # /auth, reused by the model router as a key fallback and surfaced (key
+        # material stripped) at GET /providers/discovered. models.dev is the
+        # UI-display model catalog (catalog only; LiteLLM remains the transport).
+        oc_extra = [
+            p.strip() for p in (settings.ingest_opencode_paths or "").split(",") if p.strip()
+        ]
+        self.opencode_config = OpenCodeConfig(extra_dirs=oc_extra or None)
+        self.models_catalog = ModelsCatalog()
         self.memory_brief = MemoryBriefAssembler(self.memory_graph)
         self.proactive_brief = ProactiveBriefBuilder(self.db, self.memory_graph)
 
@@ -122,8 +135,8 @@ class Runtime:
             ingest_db_path=settings.opencode_ingest_db,
         )
 
-        # 10. Model router
-        self.model_router = ModelRouter()
+        # 10. Model router — reuses OpenCode's provider auth as a key fallback.
+        self.model_router = ModelRouter(opencode_config=self.opencode_config)
 
         # 11. Desktop context — Tauri shell lands in Phase 1; run without it.
         self.desktop = None
