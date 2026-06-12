@@ -15,7 +15,7 @@ WORKDIR /app
 # source. `pip install .` reads dependencies from pyproject.toml.
 COPY pyproject.toml ./
 COPY src ./src
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir '.[embeddings]'
 
 # Persistent state lives here; compose mounts a volume over it.
 ENV CENTRI_DB_PATH=/data/state.db

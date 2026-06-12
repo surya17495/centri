@@ -56,8 +56,8 @@ export function CommandBar({
   }
 
   return (
-    <div className="shrink-0 px-4 pb-5 pt-2">
-      <form onSubmit={onSubmit} className="mx-auto w-full max-w-2xl">
+    <div className="shrink-0 pb-5 pt-2">
+      <form onSubmit={onSubmit} className="mx-auto w-full max-w-2xl px-4">
         {error && (
           <div className="mb-2 animate-rise-in rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs text-rose-300">
             {error}

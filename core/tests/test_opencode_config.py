@@ -35,7 +35,7 @@ class TestOpenCodeConfig:
             "anthropic": {"apiKey": "sk-ant-yyy"},
             "openrouter": "sk-or-zzz",
         })
-        cfg = OpenCodeConfig(extra_dirs=[str(d)])
+        cfg = OpenCodeConfig(extra_dirs=[str(d)], use_defaults=False)
         providers = {p.provider: p for p in cfg.discovered_providers()}
         assert {"openai", "anthropic", "openrouter"} <= set(providers)
         assert all(p.has_key for p in providers.values())
@@ -43,14 +43,14 @@ class TestOpenCodeConfig:
     def test_resolve_provider_key_returns_credential_internally(self, tmp_path):
         d = tmp_path / "opencode"
         _write(d / "auth.json", {"openai": {"key": "sk-secret-123"}})
-        cfg = OpenCodeConfig(extra_dirs=[str(d)])
+        cfg = OpenCodeConfig(extra_dirs=[str(d)], use_defaults=False)
         assert cfg.resolve_provider_key("openai") == "sk-secret-123"
         assert cfg.resolve_provider_key("absent") is None
 
     def test_discovered_providers_never_leak_key_material(self, tmp_path):
         d = tmp_path / "opencode"
         _write(d / "auth.json", {"openai": {"key": "sk-secret-123"}})
-        cfg = OpenCodeConfig(extra_dirs=[str(d)])
+        cfg = OpenCodeConfig(extra_dirs=[str(d)], use_defaults=False)
         serialized = json.dumps([p.as_dict() for p in cfg.discovered_providers()])
         assert "sk-secret-123" not in serialized
         assert '"has_key": true' in serialized
@@ -60,7 +60,7 @@ class TestOpenCodeConfig:
         _write(d / "opencode.json", {
             "provider": {"openai": {"models": {"gpt-4o": {}, "gpt-4o-mini": {}}}}
         })
-        cfg = OpenCodeConfig(extra_dirs=[str(d)])
+        cfg = OpenCodeConfig(extra_dirs=[str(d)], use_defaults=False)
         providers = {p.provider: p for p in cfg.discovered_providers()}
         assert "openai" in providers
         assert set(providers["openai"].models) == {"gpt-4o", "gpt-4o-mini"}
@@ -68,7 +68,7 @@ class TestOpenCodeConfig:
         assert providers["openai"].has_key is False
 
     def test_missing_dirs_degrade_honestly(self, tmp_path):
-        cfg = OpenCodeConfig(extra_dirs=[str(tmp_path / "nope")])
+        cfg = OpenCodeConfig(extra_dirs=[str(tmp_path / "nope")], use_defaults=False)
         assert cfg.discovered_providers() == []
         assert cfg.resolve_provider_key("openai") is None
 

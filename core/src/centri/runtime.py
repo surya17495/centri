@@ -80,6 +80,16 @@ class Runtime:
         # 1. DB
         self.db = Database()
 
+        # 1b. Load and apply database configuration overrides
+        try:
+            overrides = await self.db.get_all_setting_overrides()
+            if overrides:
+                from centri.config import update_settings
+                update_settings(overrides)
+                settings = get_settings()
+        except Exception as exc:
+            logger.warning("Failed to load settings overrides from database: %s", exc)
+
         # 2. Observability
         self.observability = Observability()
 

@@ -108,8 +108,8 @@ class OpenCodeConfig:
     or unreadable file simply contributes nothing.
     """
 
-    def __init__(self, extra_dirs: Optional[List[str]] = None):
-        self._dirs: List[Path] = list(default_config_dirs())
+    def __init__(self, extra_dirs: Optional[List[str]] = None, use_defaults: bool = True):
+        self._dirs: List[Path] = list(default_config_dirs()) if use_defaults else []
         for d in extra_dirs or []:
             self._dirs.append(Path(d).expanduser())
 
@@ -184,6 +184,27 @@ class OpenCodeConfig:
                 )
             )
         return out
+
+    def resolve_provider_base_url(self, provider: str) -> Optional[str]:
+        """Return OpenCode's configured base URL for ``provider`` if available."""
+        for path in self._config_files():
+            data = _read_json(path)
+            if not isinstance(data, dict):
+                continue
+            provider_block = data.get("provider")
+            if not isinstance(provider_block, dict):
+                continue
+            cfg = provider_block.get(provider)
+            if isinstance(cfg, dict):
+                opts = cfg.get("options")
+                if isinstance(opts, dict):
+                    url = opts.get("baseURL") or opts.get("baseUrl")
+                    if isinstance(url, str) and url.strip():
+                        return url.strip()
+                url = cfg.get("baseURL") or cfg.get("baseUrl")
+                if isinstance(url, str) and url.strip():
+                    return url.strip()
+        return None
 
     def resolve_provider_key(self, provider: str) -> Optional[str]:
         """Return OpenCode's stored key for ``provider`` (in-process use only).

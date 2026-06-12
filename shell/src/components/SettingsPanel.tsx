@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { api, getAuthToken, getBackendUrl, setAuthToken, setBackendUrl } from "../api";
 import type { DiscoverResponse, StatusResponse } from "../types";
 
@@ -33,11 +33,87 @@ export function SettingsPanel({
   const [provider, setProvider] = useState("anthropic");
   const [apiKey, setApiKey] = useState("");
   const [keyStatus, setKeyStatus] = useState<string | null>(null);
+  const [roleModels, setRoleModels] = useState<Record<string, string>>({});
+  const [saveStatus, setSaveStatus] = useState<string | null>(null);
+  const [importStatus, setImportStatus] = useState<string | null>(null);
+  // Consolidation + embedding config
+  const [consolidationModel, setConsolidationModel] = useState("");
+  const [consolidationBatchSize, setConsolidationBatchSize] = useState("8");
+  const [embeddingEnabled, setEmbeddingEnabled] = useState(false);
+  const [embeddingLocalModel, setEmbeddingLocalModel] = useState("");
+  const [memConfigStatus, setMemConfigStatus] = useState<string | null>(null);
+
+  async function handleImport() {
+    setImportStatus("Importing…");
+    try {
+      await api.bootstrap();
+      setImportStatus("Import complete");
+      setTimeout(() => setImportStatus(null), 4000);
+      onSaved();
+    } catch (e) {
+      setImportStatus(e instanceof Error ? e.message : "Import failed");
+    }
+  }
+
+  // Load current server-side overrides on open
+  useEffect(() => {
+    api.getSettingsOverrides().then(({ overrides }) => {
+      if (overrides.consolidation_model) setConsolidationModel(String(overrides.consolidation_model));
+      if (overrides.consolidation_batch_size) setConsolidationBatchSize(String(overrides.consolidation_batch_size));
+      if (overrides.embedding_enabled !== undefined) setEmbeddingEnabled(String(overrides.embedding_enabled) === "true");
+      if (overrides.embedding_local_model) setEmbeddingLocalModel(String(overrides.embedding_local_model));
+    }).catch(() => {/* non-fatal */});
+  }, []);
+
+  useEffect(() => {
+    if (status?.role_models) {
+      const initial: Record<string, string> = {};
+      Object.entries(status.role_models).forEach(([role, info]) => {
+        initial[role] = info.model || "";
+      });
+      setRoleModels(initial);
+    }
+  }, [status]);
+
+  async function saveModels() {
+    setSaveStatus("Saving…");
+    try {
+      const payload: Record<string, string> = {};
+      Object.entries(roleModels).forEach(([role, model]) => {
+        payload[`model_${role}`] = model;
+      });
+      await api.updateSettingsOverrides(payload);
+      setSaveStatus("Saved models");
+      setTimeout(() => setSaveStatus(null), 3000);
+      onSaved();
+    } catch (e) {
+      setSaveStatus(e instanceof Error ? e.message : "Failed to save models");
+    }
+  }
 
   function saveBackend() {
     setBackendUrl(backend);
     setAuthToken(token.trim());
     onSaved();
+  }
+
+  async function saveMemoryConfig() {
+    setMemConfigStatus("Saving…");
+    try {
+      await api.updateSettingsOverrides({
+        consolidation_model: consolidationModel,
+        consolidation_batch_size: consolidationBatchSize,
+        embedding_enabled: embeddingEnabled ? "true" : "false",
+        embedding_local_model: embeddingLocalModel,
+        // Activate semantic scoring when embeddings are on
+        curation_w_embedding_similarity: embeddingEnabled ? "0.35" : "0.0",
+      });
+      setMemConfigStatus("Saved");
+      setTimeout(() => setMemConfigStatus(null), 3000);
+      onSaved();
+    } catch (e) {
+      setMemConfigStatus(e instanceof Error ? e.message : "Failed to save");
+    }
   }
 
   async function connectKey() {
@@ -99,6 +175,33 @@ export function SettingsPanel({
         </section>
 
         <section className="mt-7">
+          <div className="flex items-center justify-between">
+            <SectionTitle>Memory import</SectionTitle>
+            {importStatus && (
+              <span className="text-[10px] text-ink-dim animate-fade-in">{importStatus}</span>
+            )}
+          </div>
+          <div className="mt-2.5 space-y-2">
+            <p className="text-xs leading-relaxed text-ink-dim">
+              {discover?.bootstrapped
+                ? "Histories already imported. Re-run to pick up any new sessions."
+                : "Import your OpenCode, Claude Code, and Cursor histories into memory."}
+            </p>
+            <button
+              onClick={onReimport ?? handleImport}
+              disabled={importStatus === "Importing…"}
+              className={`w-full ${PRIMARY_BTN} disabled:opacity-60 disabled:cursor-not-allowed`}
+            >
+              {importStatus === "Importing…"
+                ? "Importing…"
+                : discover?.bootstrapped
+                ? "Re-run import"
+                : "Import now"}
+            </button>
+          </div>
+        </section>
+
+        <section className="mt-7">
           <SectionTitle>API key (BYOK)</SectionTitle>
           <div className="mt-2.5 space-y-2">
             <div className="flex gap-2">
@@ -127,22 +230,6 @@ export function SettingsPanel({
             <div className="mt-2 text-xs text-ink-dim animate-fade-in">{keyStatus}</div>
           )}
         </section>
-
-        {onReimport && (
-          <section className="mt-7">
-            <SectionTitle>Memory import</SectionTitle>
-            <div className="mt-2.5 space-y-2">
-              <p className="text-xs leading-relaxed text-ink-dim">
-                {discover?.bootstrapped
-                  ? "Coding-agent histories have been imported. Re-run to pick up anything new."
-                  : "Import your OpenCode / Claude Code / Cursor history into memory."}
-              </p>
-              <button onClick={onReimport} className={`w-full ${PRIMARY_BTN}`}>
-                {discover?.bootstrapped ? "Re-run import" : "Import now"}
-              </button>
-            </div>
-          </section>
-        )}
 
         <section className="mt-7">
           <SectionTitle>Hands</SectionTitle>
@@ -178,24 +265,118 @@ export function SettingsPanel({
         </section>
 
         <section className="mt-7">
-          <SectionTitle>Model roles</SectionTitle>
-          <div className="mt-2.5 divide-y divide-line rounded-xl border border-white/[0.08] bg-white/[0.03]">
-            {Object.entries(status?.role_models ?? {}).map(([role, info]) => (
-              <div key={role} className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
-                <span className="shrink-0 text-ink-dim">{role}</span>
-                <span
-                  className={`truncate text-right font-mono text-[11px] ${
-                    info.configured && info.model ? "text-ink" : "text-ink-faint"
-                  }`}
-                  title={info.via_proxy ? "via proxy" : undefined}
-                >
-                  {info.configured && info.model ? info.model : "not configured"}
-                </span>
+          <div className="flex items-center justify-between">
+            <SectionTitle>Model roles</SectionTitle>
+            {saveStatus && (
+              <span className="text-[10px] text-ink-dim animate-fade-in">{saveStatus}</span>
+            )}
+          </div>
+          <div className="mt-2.5 space-y-3 rounded-xl border border-white/[0.08] bg-white/[0.03] p-3">
+            {Object.keys(status?.role_models ?? {}).map((role) => (
+              <div key={role} className="flex flex-col gap-1.5">
+                <label htmlFor={`model-input-${role}`} className="text-[10px] font-medium text-ink-dim uppercase tracking-wider">
+                  {role.replace("_", " ")}
+                </label>
+                <input
+                  id={`model-input-${role}`}
+                  value={roleModels[role] ?? ""}
+                  onChange={(e) =>
+                    setRoleModels((prev) => ({ ...prev, [role]: e.target.value }))
+                  }
+                  placeholder="e.g. pioneer/claude-opus-4-8"
+                  className={`w-full font-mono ${FIELD}`}
+                />
               </div>
             ))}
-            {(!status || Object.keys(status.role_models).length === 0) && (
-              <div className="px-3 py-2 text-xs text-ink-faint">No role mapping reported.</div>
+            {status && Object.keys(status.role_models).length > 0 && (
+              <button onClick={saveModels} className={`w-full mt-2 ${PRIMARY_BTN}`}>
+                Save Model Roles
+              </button>
             )}
+            {(!status || Object.keys(status.role_models).length === 0) && (
+              <div className="text-xs text-ink-faint text-center py-2">
+                Connect to backend to view and edit model roles.
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="mt-7">
+          <div className="flex items-center justify-between">
+            <SectionTitle>Memory config</SectionTitle>
+            {memConfigStatus && (
+              <span className="text-[10px] text-ink-dim animate-fade-in">{memConfigStatus}</span>
+            )}
+          </div>
+          <div className="mt-2.5 space-y-3 rounded-xl border border-white/[0.08] bg-white/[0.03] p-3">
+
+            {/* Embeddings */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-medium uppercase tracking-wider text-ink-dim">
+                  Embeddings
+                </label>
+                <button
+                  role="switch"
+                  aria-checked={embeddingEnabled}
+                  onClick={() => setEmbeddingEnabled((v) => !v)}
+                  className={`relative h-5 w-9 rounded-full transition-colors ${
+                    embeddingEnabled ? "bg-accent" : "bg-white/10"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                      embeddingEnabled ? "translate-x-4" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+              <input
+                value={embeddingLocalModel}
+                onChange={(e) => setEmbeddingLocalModel(e.target.value)}
+                placeholder="BAAI/bge-small-en-v1.5  (fastembed, local)"
+                aria-label="Embedding local model"
+                className={`w-full font-mono ${FIELD}`}
+              />
+              <p className="text-[10px] leading-relaxed text-ink-faint">
+                Local model runs in-container via fastembed — no API cost. Leave blank to disable.
+              </p>
+            </div>
+
+            {/* Consolidation */}
+            <div className="flex flex-col gap-1.5 border-t border-white/[0.06] pt-3">
+              <label className="text-[10px] font-medium uppercase tracking-wider text-ink-dim">
+                Consolidation model
+              </label>
+              <input
+                value={consolidationModel}
+                onChange={(e) => setConsolidationModel(e.target.value)}
+                placeholder="e.g. meta-llama/Llama-3.3-70B-Instruct"
+                aria-label="Consolidation model"
+                className={`w-full font-mono ${FIELD}`}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] font-medium uppercase tracking-wider text-ink-dim">
+                Consolidation batch size
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={consolidationBatchSize}
+                onChange={(e) => setConsolidationBatchSize(e.target.value)}
+                aria-label="Consolidation batch size"
+                className={`w-full font-mono ${FIELD}`}
+              />
+              <p className="text-[10px] leading-relaxed text-ink-faint">
+                Number of unprocessed events that trigger a consolidation run.
+              </p>
+            </div>
+
+            <button onClick={saveMemoryConfig} className={`w-full mt-1 ${PRIMARY_BTN}`}>
+              Save memory config
+            </button>
           </div>
         </section>
       </div>

@@ -56,8 +56,7 @@ export default function App() {
   const showOnboarding =
     !dismissedOnboarding &&
     discover !== null &&
-    !discover.bootstrapped &&
-    discover.available_count > 0;
+    !discover.bootstrapped;
 
   const refreshThreads = useCallback(() => {
     api
@@ -99,23 +98,24 @@ export default function App() {
         />
         <main className="flex min-h-0 flex-1 flex-col">
           {showOnboarding && discover && (
-            <div className="shrink-0 px-4 pt-4">
-              <OnboardingCard
-                discover={discover}
-                bootstrap={bootstrap}
-                importing={importing}
-                onImport={startImport}
-                onDismiss={() => setDismissedOnboarding(true)}
-              />
+            <div className="shrink-0 pt-4">
+              <div className="mx-auto w-full max-w-2xl px-4">
+                <OnboardingCard
+                  discover={discover}
+                  bootstrap={bootstrap}
+                  importing={importing}
+                  onImport={startImport}
+                  onDismiss={() => setDismissedOnboarding(true)}
+                />
+              </div>
             </div>
           )}
           <div className="min-h-0 flex-1">
             <Timeline items={timeline} onResolve={resolveApproval} />
           </div>
+          <CommandBar threadId={activeThreadId} onSent={refreshThreads} />
         </main>
       </div>
-
-      <CommandBar threadId={activeThreadId} onSent={refreshThreads} />
 
       {settingsOpen && (
         <SettingsPanel

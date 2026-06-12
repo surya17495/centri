@@ -611,6 +611,31 @@ async def get_artifacts(task_id: str) -> Dict[str, Any]:
     return {"artifacts": arts}
 
 
+class SettingsOverridesRequest(BaseModel):
+    settings: Dict[str, Any]
+
+
+@app.get("/settings/overrides")
+async def get_settings_overrides() -> Dict[str, Any]:
+    overrides = await runtime.db.get_all_setting_overrides()
+    return {"overrides": overrides}
+
+
+@app.post("/settings/overrides")
+async def update_settings_overrides(req: SettingsOverridesRequest) -> Dict[str, Any]:
+    for key, value in req.settings.items():
+        from centri.config import get_settings
+        if not hasattr(get_settings(), key):
+            raise HTTPException(status_code=400, detail=f"Invalid setting key: {key}")
+        await runtime.db.set_setting_override(key, str(value))
+    
+    # Reload settings overrides in memory
+    overrides = await runtime.db.get_all_setting_overrides()
+    from centri.config import update_settings
+    update_settings(overrides)
+    return {"status": "ok", "overrides": overrides}
+
+
 # ----------------------------------------------------------------------
 # Voice — returns in Phase 3 behind a clean interface. Honest-unavailable now.
 # ----------------------------------------------------------------------

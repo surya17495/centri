@@ -120,6 +120,11 @@ CREATE TABLE IF NOT EXISTS ingest_state (
     last_run_at TEXT,
     ingested_count INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS runtime_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -566,3 +571,19 @@ class Database:
                   updated_at=excluded.updated_at""",
             (agent_id, blocks_json, persona, human, updated_at),
         )
+
+    # runtime_settings
+    async def get_setting_override(self, key: str) -> Optional[str]:
+        cur = await self._execute("SELECT value FROM runtime_settings WHERE key = ?", (key,))
+        row = cur.fetchone()
+        return row["value"] if row else None
+
+    async def set_setting_override(self, key: str, value: str) -> None:
+        await self._execute(
+            "INSERT INTO runtime_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+
+    async def get_all_setting_overrides(self) -> Dict[str, str]:
+        cur = await self._execute("SELECT key, value FROM runtime_settings")
+        return {row["key"]: row["value"] for row in cur.fetchall()}

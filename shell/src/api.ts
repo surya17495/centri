@@ -118,4 +118,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ api_key: apiKey }),
     }),
+
+  getSettingsOverrides: () => req<{ overrides: Record<string, string> }>("/settings/overrides"),
+
+  updateSettingsOverrides: (settings: Record<string, string>) =>
+    req<{ status: string; overrides: Record<string, string> }>("/settings/overrides", {
+      method: "POST",
+      body: JSON.stringify({ settings }),
+    }),
 };

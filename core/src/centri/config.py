@@ -3,12 +3,12 @@
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List
+from typing import List, Any, Dict
 
 from dotenv import load_dotenv
 
 
-@dataclass(frozen=True)
+@dataclass
 class Settings:
     """CENTRI configuration — all env placeholders, user fills .env (BYOK)."""
 
@@ -259,3 +259,25 @@ def get_settings() -> Settings:
     if _settings is None:
         _settings = Settings.from_env()
     return _settings
+
+
+def update_settings(overrides: dict[str, Any]) -> Settings:
+    global _settings
+    settings = get_settings()
+    for k, v in overrides.items():
+        if hasattr(settings, k):
+            field_type = settings.__annotations__.get(k)
+            if field_type == int:
+                try:
+                    v = int(v)
+                except ValueError:
+                    pass
+            elif field_type == float:
+                try:
+                    v = float(v)
+                except ValueError:
+                    pass
+            elif field_type == bool:
+                v = str(v).lower() in ("true", "1", "yes")
+            object.__setattr__(settings, k, v)
+    return settings

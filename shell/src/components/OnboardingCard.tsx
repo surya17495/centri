@@ -20,12 +20,21 @@ function describeFindings(discover: DiscoverResponse): string {
     if (!s.available) continue;
     byAgent.set(s.agent, (byAgent.get(s.agent) ?? 0) + (s.count ?? 0));
   }
+  if (byAgent.size === 0) {
+    return "No coding-agent histories auto-detected on this machine.";
+  }
   const parts = [...byAgent.entries()].map(
     ([agent, count]) => `${count.toLocaleString()} ${agentLabel(agent)} message${count === 1 ? "" : "s"}`,
   );
-  if (parts.length === 0) return "No prior coding-agent history found.";
   if (parts.length === 1) return `Found ${parts[0]}`;
   return `Found ${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+function importCta(discover: DiscoverResponse): string {
+  if (discover.available_count === 0) {
+    return "No local coding-agent histories were auto-detected. You can still run the import — the server will pick up any configured history paths.";
+  }
+  return `${describeFindings(discover)} — import into memory?`;
 }
 
 export function OnboardingCard({
@@ -41,7 +50,7 @@ export function OnboardingCard({
   onImport: () => void;
   onDismiss: () => void;
 }) {
-  const findings = useMemo(() => describeFindings(discover), [discover]);
+  const cta = useMemo(() => importCta(discover), [discover]);
   const running = importing && bootstrap?.phase !== "completed";
   const done = bootstrap?.phase === "completed";
 
@@ -61,7 +70,7 @@ export function OnboardingCard({
                 ? `Imported ${bootstrap?.imported.toLocaleString() ?? 0} message${
                     bootstrap?.imported === 1 ? "" : "s"
                   } into memory. CENTRI now remembers your prior coding sessions.`
-                : `${findings} — import into memory?`}
+                : cta}
             </p>
             {running && bootstrap?.lastSummary && (
               <p className="mt-1.5 truncate font-mono text-[11px] text-accent" aria-live="polite">

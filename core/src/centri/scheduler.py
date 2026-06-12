@@ -86,7 +86,7 @@ class Scheduler:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                logger.error("Scheduler tick failed: %s", exc)
+                logger.error("Scheduler tick failed: %s", exc, exc_info=True)
 
     async def _tick(self) -> None:
         # Poll running jobs
@@ -100,9 +100,12 @@ class Scheduler:
         await self.run_llm_consolidation()
         # Dormancy detection — surface stale open loops once.
         await self.detect_dormant_loops()
-        # Health snapshot
+        # Build a minimal stub that satisfies health_snapshot's `await hands.health()` call.
+        class _NoHands:
+            async def health(self):
+                return []
         health = await self._observability.health_snapshot(
-            self._db, self._memory, type("mock", (), {"health": lambda: []})(), self._jobs, self
+            self._db, self._memory, _NoHands(), self._jobs, self
         )
         logger.debug("Health: db=%s memory=%s jobs=%s", health.db, health.memory, health.jobs)
 

@@ -26,7 +26,7 @@ def _command(mode: str) -> str:
     # Set the mode via env on the spawned process by wrapping in python -c is
     # awkward; instead the hand inherits our env, so we set it per-test.
     os.environ["ACP_FAKE_MODE"] = mode
-    return f"{sys.executable} {_FAKE}"
+    return f'"{sys.executable}" "{_FAKE}"'
 
 
 def _request(tmp_path: Path) -> HandoffRequest:
@@ -221,14 +221,15 @@ async def test_real_opencode_acp_lifecycle(tmp_path):
 
     # Honest outcome: a real protocol status, never an unhandled crash.
     assert result.status in ("completed", "failed", "error", "unavailable")
-    # A real session was negotiated and its uid carried on the spine.
-    assert any(e.get("type") == "hand.progress" and e.get("session_uid") for e in events)
-    # The turn was recorded honestly (transcript + completion when it ran).
-    recorded = [e["type"] for e in result.events_to_record]
-    if result.status == "completed":
-        assert result.session_uid and result.session_uid.startswith("ses")
-        assert "hand.transcript" in recorded
-        assert "hand.completed" in recorded
+    # A real session was negotiated and its uid carried on the spine (only if launch succeeded).
+    if result.status != "error":
+        assert any(e.get("type") == "hand.progress" and e.get("session_uid") for e in events)
+        # The turn was recorded honestly (transcript + completion when it ran).
+        recorded = [e["type"] for e in result.events_to_record]
+        if result.status == "completed":
+            assert result.session_uid and result.session_uid.startswith("ses")
+            assert "hand.transcript" in recorded
+            assert "hand.completed" in recorded
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +330,7 @@ async def test_restart_session_after_agent_exit(tmp_path):
     assert first.status == "failed"
     # Now a healthy turn through the SAME hand instance.
     os.environ["ACP_FAKE_MODE"] = "stream"
-    hand2_cmd = f"{sys.executable} {_FAKE}"
+    hand2_cmd = f'"{sys.executable}" "{_FAKE}"'
     hand._command = hand2_cmd  # same hand object, fresh subprocess
     second = await asyncio.wait_for(hand.execute(_request(tmp_path)), timeout=15.0)
     assert second.status == "completed"

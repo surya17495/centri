@@ -143,14 +143,40 @@ class ModelRouter:
 
     def _provider_credentials(self, provider: str) -> tuple[Optional[str], Optional[str]]:
         # CENTRI_* env keys always win (Decision 5: env > OpenCode auth).
+        prov_upper = provider.upper()
+        api_key = (
+            os.getenv(f"CENTRI_{prov_upper}_API_KEY")
+            or os.getenv(f"{prov_upper}_API_KEY")
+            or getattr(self._settings, f"{provider}_api_key", None)
+        )
+        api_base = (
+            os.getenv(f"CENTRI_{prov_upper}_BASE_URL")
+            or os.getenv(f"{prov_upper}_BASE_URL")
+            or os.getenv(f"{prov_upper}_API_BASE")
+            or getattr(self._settings, f"{provider}_base_url", None)
+        )
+
         if provider == "openai":
-            api_key = self._settings.openai_api_key or self._opencode_key("openai")
-            return api_key or None, self._settings.openai_base_url or None
-        if provider == "nebius":
-            api_key = self._settings.nebius_api_key or self._opencode_key("nebius")
-            return api_key or None, self._settings.nebius_base_url or None
-        # Other providers: no env path here, so OpenCode auth is the only source.
-        return self._opencode_key(provider) or None, None
+            if not api_key:
+                api_key = self._opencode_key("openai")
+            if not api_base:
+                api_base = self._settings.openai_base_url
+        elif provider == "nebius":
+            if not api_key:
+                api_key = self._opencode_key("nebius")
+            if not api_base:
+                api_base = self._settings.nebius_base_url
+        else:
+            # Fall back to OpenCode config resolution for generic providers
+            if not api_key:
+                api_key = self._opencode_key(provider)
+            if not api_base:
+                try:
+                    api_base = self._opencode_config.resolve_provider_base_url(provider)
+                except Exception:
+                    pass
+
+        return api_key or None, api_base or None
 
     def _opencode_key(self, provider: str) -> Optional[str]:
         """OpenCode-auth fallback for a provider key; honest None when absent."""
@@ -163,7 +189,12 @@ class ModelRouter:
             return None
 
     def _has_supported_provider_prefix(self, model: str) -> bool:
-        return model.startswith(("openai/", "nebius/"))
+        if "/" not in model:
+            return False
+        prefix = model.split("/", 1)[0]
+        # Any prefix that has credentials (either in settings, env, or opencode config) is supported
+        key, base = self._provider_credentials(prefix)
+        return key is not None
 
     def _embed_model_for_custom_base(self, model: str) -> str:
         """Prepend ``openai/`` to a bare embedding id when a custom base URL is set.

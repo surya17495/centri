@@ -27,6 +27,9 @@ dev = [
     "pytest-asyncio>=0.24.0",
     "ruff>=0.7.0",
 ]
+embeddings = [
+    "fastembed>=0.3.0",
+]
 
 [project.scripts]
 centri = "centri.cli:run"
