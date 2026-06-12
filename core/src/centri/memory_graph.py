@@ -36,6 +36,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from centri.db import DEFAULT_TENANT
+
 # Node kinds. ``decision`` covers both adoptions and rejections; ``stance``
 # distinguishes them so the re-proposal guard can find rejected approaches.
 KIND_DECISION = "decision"
@@ -79,6 +81,7 @@ class Decision:
     rationale: str = ""
     source_event_id: Optional[str] = None
     repo_id: Optional[str] = None
+    tenant_id: str = DEFAULT_TENANT
     created_at: str = field(default_factory=_now)
     superseded_by: Optional[str] = None
     invalidated_at: Optional[str] = None
@@ -94,6 +97,7 @@ class Fact:
     statement: str
     source_event_id: Optional[str] = None
     repo_id: Optional[str] = None
+    tenant_id: str = DEFAULT_TENANT
     created_at: str = field(default_factory=_now)
     superseded_by: Optional[str] = None
     invalidated_at: Optional[str] = None
@@ -109,6 +113,7 @@ class OpenLoop:
     state: str = LOOP_OPEN  # open | done | parked | dormant
     source_event_id: Optional[str] = None
     repo_id: Optional[str] = None
+    tenant_id: str = DEFAULT_TENANT
     cue: str = ""  # free-text cue that should resurface this loop
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
@@ -143,6 +148,7 @@ class MemoryGraph:
                 rationale TEXT NOT NULL DEFAULT '',
                 source_event_id TEXT,
                 repo_id TEXT,
+                tenant_id TEXT NOT NULL DEFAULT 'local',
                 created_at TEXT NOT NULL,
                 superseded_by TEXT,
                 invalidated_at TEXT,
@@ -156,6 +162,7 @@ class MemoryGraph:
                 statement TEXT NOT NULL,
                 source_event_id TEXT,
                 repo_id TEXT,
+                tenant_id TEXT NOT NULL DEFAULT 'local',
                 created_at TEXT NOT NULL,
                 superseded_by TEXT,
                 invalidated_at TEXT,
@@ -169,6 +176,7 @@ class MemoryGraph:
                 state TEXT NOT NULL DEFAULT 'open',
                 source_event_id TEXT,
                 repo_id TEXT,
+                tenant_id TEXT NOT NULL DEFAULT 'local',
                 cue TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -177,6 +185,16 @@ class MemoryGraph:
                 tags TEXT NOT NULL DEFAULT ''
             )"""
         )
+        # Additive migration for graph tables created before Phase A (Decision 9):
+        # ALTER in tenant_id if an older table is missing it. Mirrors Database._migrate
+        # so the column is present no matter which path created the table first.
+        for table in ("mem_decisions", "mem_facts", "mem_open_loops"):
+            cur = await self._db._execute(f"PRAGMA table_info({table})")
+            cols = {r["name"] for r in cur.fetchall()}
+            if "tenant_id" not in cols:
+                await self._db._execute(
+                    f"ALTER TABLE {table} ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'local'"
+                )
         self._ready = True
 
     # ------------------------------------------------------------------
@@ -187,11 +205,11 @@ class MemoryGraph:
         await self._db._execute(
             """INSERT OR REPLACE INTO mem_decisions
                (id, topic, statement, stance, rationale, source_event_id, repo_id,
-                created_at, superseded_by, invalidated_at, tags)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                tenant_id, created_at, superseded_by, invalidated_at, tags)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 d.id, d.topic, d.statement, d.stance, d.rationale, d.source_event_id,
-                d.repo_id, d.created_at, d.superseded_by, d.invalidated_at,
+                d.repo_id, d.tenant_id, d.created_at, d.superseded_by, d.invalidated_at,
                 ",".join(d.tags),
             ),
         )
@@ -200,12 +218,12 @@ class MemoryGraph:
         await self.ensure_tables()
         await self._db._execute(
             """INSERT OR REPLACE INTO mem_facts
-               (id, topic, statement, source_event_id, repo_id, created_at,
+               (id, topic, statement, source_event_id, repo_id, tenant_id, created_at,
                 superseded_by, invalidated_at, tags)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (
                 f.id, f.topic, f.statement, f.source_event_id, f.repo_id,
-                f.created_at, f.superseded_by, f.invalidated_at, ",".join(f.tags),
+                f.tenant_id, f.created_at, f.superseded_by, f.invalidated_at, ",".join(f.tags),
             ),
         )
 
@@ -213,12 +231,12 @@ class MemoryGraph:
         await self.ensure_tables()
         await self._db._execute(
             """INSERT OR REPLACE INTO mem_open_loops
-               (id, intent, state, source_event_id, repo_id, cue, created_at,
+               (id, intent, state, source_event_id, repo_id, tenant_id, cue, created_at,
                 updated_at, last_touched_at, dormancy_asked_at, tags)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 loop.id, loop.intent, loop.state, loop.source_event_id, loop.repo_id,
-                loop.cue, loop.created_at, loop.updated_at, loop.last_touched_at,
+                loop.tenant_id, loop.cue, loop.created_at, loop.updated_at, loop.last_touched_at,
                 loop.dormancy_asked_at, ",".join(loop.tags),
             ),
         )
@@ -422,11 +440,20 @@ class MemoryGraph:
     def _split_tags(raw: Any) -> List[str]:
         return [t for t in (raw or "").split(",") if t]
 
+    @staticmethod
+    def _tenant_of(r: Any) -> str:
+        # Tolerate rows from a DB whose migration hasn't been applied yet (e.g. a
+        # read against a legacy table mid-upgrade): default to the single-tenant key.
+        try:
+            return r["tenant_id"] or DEFAULT_TENANT
+        except (KeyError, IndexError):
+            return DEFAULT_TENANT
+
     def _row_to_decision(self, r: Any) -> Decision:
         return Decision(
             id=r["id"], topic=r["topic"], statement=r["statement"], stance=r["stance"],
             rationale=r["rationale"], source_event_id=r["source_event_id"],
-            repo_id=r["repo_id"], created_at=r["created_at"],
+            repo_id=r["repo_id"], tenant_id=self._tenant_of(r), created_at=r["created_at"],
             superseded_by=r["superseded_by"], invalidated_at=r["invalidated_at"],
             tags=self._split_tags(r["tags"]),
         )
@@ -435,14 +462,16 @@ class MemoryGraph:
         return Fact(
             id=r["id"], topic=r["topic"], statement=r["statement"],
             source_event_id=r["source_event_id"], repo_id=r["repo_id"],
-            created_at=r["created_at"], superseded_by=r["superseded_by"],
+            tenant_id=self._tenant_of(r), created_at=r["created_at"],
+            superseded_by=r["superseded_by"],
             invalidated_at=r["invalidated_at"], tags=self._split_tags(r["tags"]),
         )
 
     def _row_to_loop(self, r: Any) -> OpenLoop:
         return OpenLoop(
             id=r["id"], intent=r["intent"], state=r["state"],
-            source_event_id=r["source_event_id"], repo_id=r["repo_id"], cue=r["cue"],
+            source_event_id=r["source_event_id"], repo_id=r["repo_id"],
+            tenant_id=self._tenant_of(r), cue=r["cue"],
             created_at=r["created_at"], updated_at=r["updated_at"],
             last_touched_at=r["last_touched_at"], dormancy_asked_at=r["dormancy_asked_at"],
             tags=self._split_tags(r["tags"]),

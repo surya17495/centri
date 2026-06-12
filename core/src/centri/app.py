@@ -455,7 +455,7 @@ def _normalize_event_row(row: Dict[str, Any]) -> Dict[str, Any]:
             payload = {}
     event: Dict[str, Any] = {
         key: row.get(key)
-        for key in ("id", "type", "source", "ts", "thread_id", "task_id", "repo_id", "importance")
+        for key in ("id", "type", "source", "ts", "thread_id", "task_id", "repo_id", "tenant_id", "importance")
     }
     event["payload"] = payload
     for key in (

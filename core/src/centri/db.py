@@ -10,6 +10,13 @@ from centri.config import get_settings
 from centri.redaction import redact_jsonable
 
 
+# Tenancy key (Phase A, Decision 9). Every spine row carries a tenant_id so that
+# hosted multi-tenant mode is a no-migration switch later. Single-tenant code
+# paths use this default and may otherwise ignore the column; enforcement on
+# query paths is Phase 6, not now.
+DEFAULT_TENANT = "local"
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY,
@@ -19,6 +26,7 @@ CREATE TABLE IF NOT EXISTS events (
     thread_id TEXT,
     task_id TEXT,
     repo_id TEXT,
+    tenant_id TEXT NOT NULL DEFAULT 'local',
     importance TEXT DEFAULT 'low',
     payload_json TEXT NOT NULL DEFAULT '{}'
 );
@@ -128,8 +136,45 @@ class Database:
     def _ensure_schema(self) -> None:
         conn = sqlite3.connect(str(self._path))
         conn.executescript(_SCHEMA)
+        self._migrate(conn)
         conn.commit()
         conn.close()
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """Idempotent in-place migrations for DBs created before a schema change.
+
+        `CREATE TABLE IF NOT EXISTS` does not alter an existing table, so a DB
+        from a prior version keeps its old columns. Each migration here is an
+        additive `ALTER TABLE ... ADD COLUMN` with a constant default, which
+        SQLite applies without rewriting rows: existing data is preserved and
+        every pre-existing row gets the default value.
+
+        Phase A (Decision 9): add `tenant_id` to the spine and the derived graph
+        tables so hosted multi-tenant mode is a no-migration switch later. The
+        derived graph tables are created lazily by MemoryGraph; we only ALTER
+        them here if they already exist (otherwise they are born with the column).
+        """
+        tenancy_targets = (
+            "events",
+            "mem_decisions",
+            "mem_facts",
+            "mem_open_loops",
+        )
+        existing = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        for table in tenancy_targets:
+            if table not in existing:
+                continue
+            cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            if "tenant_id" not in cols:
+                conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'local'"
+                )
 
     async def _get_conn(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -156,24 +201,30 @@ class Database:
         repo_id: Optional[str] = None,
         importance: str = "low",
         payload: Optional[Dict[str, Any]] = None,
+        tenant_id: str = DEFAULT_TENANT,
     ) -> None:
         # Redact secrets before the payload ever touches the append-only ledger.
         payload_json = json.dumps(redact_jsonable(payload or {}))
         await self._execute(
-            "INSERT INTO events (id, type, source, ts, thread_id, task_id, repo_id, importance, payload_json) VALUES (?,?,?,?,?,?,?,?,?)",
-            (event_id, type, source, ts, thread_id, task_id, repo_id, importance, payload_json),
+            "INSERT INTO events (id, type, source, ts, thread_id, task_id, repo_id, tenant_id, importance, payload_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (event_id, type, source, ts, thread_id, task_id, repo_id, tenant_id, importance, payload_json),
         )
 
-    async def recent_events(self, limit: int = 50, thread_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def recent_events(
+        self,
+        limit: int = 50,
+        thread_id: Optional[str] = None,
+        tenant_id: str = DEFAULT_TENANT,
+    ) -> List[Dict[str, Any]]:
         if thread_id:
             cur = await self._execute(
-                "SELECT * FROM events WHERE thread_id = ? ORDER BY ts DESC LIMIT ?",
-                (thread_id, limit),
+                "SELECT * FROM events WHERE tenant_id = ? AND thread_id = ? ORDER BY ts DESC LIMIT ?",
+                (tenant_id, thread_id, limit),
             )
         else:
             cur = await self._execute(
-                "SELECT * FROM events ORDER BY ts DESC LIMIT ?",
-                (limit,),
+                "SELECT * FROM events WHERE tenant_id = ? ORDER BY ts DESC LIMIT ?",
+                (tenant_id, limit),
             )
         return [dict(row) for row in cur.fetchall()]
 
