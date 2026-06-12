@@ -124,6 +124,13 @@ class Settings:
     embedding_local_model: str = ""   # e.g. "BAAI/bge-small-en-v1.5" (fastembed)
     embedding_model: str = ""         # network model id for the LiteLLM route
 
+    # Session-start push briefing (Increment 2). On session start CENTRI builds
+    # the deterministic, LLM-free ProactiveBrief and surfaces it unprompted — as a
+    # brief.session_start spine event (shells render it) and as the first turn's
+    # curated context. Default ON because it is cheap (no model call). Set
+    # CENTRI_SESSION_BRIEF=0 to disable.
+    session_brief: bool = True
+
     # Autonomy
     autonomy_level: str = "autonomous_local"
     auto_commit: bool = True
@@ -202,6 +209,7 @@ class Settings:
             embedding_model=os.getenv("CENTRI_EMBEDDING_MODEL", ""),
             enabled_hands=enabled_hands,
             hand_priority=hand_priority,
+            session_brief=os.getenv("CENTRI_SESSION_BRIEF", "true").lower() not in ("0", "false", "no", "off"),
             autonomy_level=os.getenv("CENTRI_AUTONOMY_LEVEL", "autonomous_local"),
             auto_commit=os.getenv("CENTRI_AUTO_COMMIT", "true").lower() == "true",
             auto_push=os.getenv("CENTRI_AUTO_PUSH", "false").lower() == "true",

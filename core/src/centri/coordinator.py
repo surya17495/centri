@@ -96,6 +96,8 @@ class Coordinator:
         memory_brief: Optional[Any] = None,
         curator: Optional[Any] = None,
         temporal_narrator: Optional[Any] = None,
+        proactive_brief: Optional[Any] = None,
+        session_brief_enabled: bool = True,
     ):
         self._db = db
         self._mr = model_router
@@ -121,6 +123,14 @@ class Coordinator:
         # (None) for callers without it wired.
         self._temporal = temporal_narrator
         self._last_curated_brief = None
+        # Increment 2 — session-start push briefing. The ProactiveBriefBuilder
+        # ("what changed / what's blocked / what's next / dormancy") is built once
+        # at session start and surfaced unprompted: emitted as a brief.session_start
+        # spine event AND stashed here so the FIRST turn's curated context carries
+        # it (a one-shot, cleared after the first utterance consumes it).
+        self._proactive_brief = proactive_brief
+        self._session_brief_enabled = session_brief_enabled
+        self._pending_session_brief: Optional[str] = None
 
     async def _publish(self, event: Dict[str, Any]) -> None:
         if self._event_bus is not None:
@@ -170,6 +180,54 @@ class Coordinator:
     async def _narrate(self, message: str) -> None:
         """Fire a narrate event for the voice TTS to pick up."""
         await self._record_event("narrate", source="coordinator", payload={"text": message})
+
+    # ------------------------------------------------------------------
+    # Session-start push briefing (Increment 2)
+    # ------------------------------------------------------------------
+    async def emit_session_brief(self, repo_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Build the proactive brief at session start and surface it unprompted.
+
+        Deterministic + LLM-free (just a read over the spine + typed graph), so
+        it is cheap enough to run on every session start. Two surfaces, per the
+        injection contract: (1) a ``brief.session_start`` spine event — persisted
+        and published so connected shells render it — carrying receipt counts of
+        each section; (2) the rendered brief stashed in ``_pending_session_brief``
+        so the FIRST turn's curated context prepends it like any other ambient
+        standing block. Honest no-op when disabled or no builder is wired, and an
+        empty brief still emits the event (with zero counts) so "nothing changed"
+        is itself an auditable, re-derivable fact rather than silence.
+        """
+        if not self._session_brief_enabled or self._proactive_brief is None:
+            return None
+        try:
+            brief = await self._proactive_brief.build(repo_id=repo_id)
+        except Exception:
+            logger.debug("Session-start brief build failed", exc_info=True)
+            return None
+
+        receipts = {
+            "changed_count": len(brief.changed),
+            "blocked_count": len(brief.blocked),
+            "next_count": len(brief.next_steps),
+            "dormancy_count": len(brief.dormancy_questions),
+        }
+        rendered = brief.render()
+        payload = {
+            "summary": rendered,
+            "is_empty": brief.is_empty(),
+            **receipts,
+        }
+        await self._record_event(
+            "brief.session_start",
+            source="memory",
+            repo_id=repo_id,
+            payload=payload,
+        )
+        # Stash for the first turn's curated context (one-shot). An empty render
+        # is not injected — there is nothing to prepend — but the event above
+        # still recorded that the session started with nothing pending.
+        self._pending_session_brief = rendered or None
+        return payload
 
     # ------------------------------------------------------------------
     # Main entry
@@ -246,6 +304,15 @@ class Coordinator:
 
         # Build context in parallel with memory recall
         packet, _recall = await self._build_context_parallel(text)
+
+        # First turn after session start: prepend the proactive session brief into
+        # the curated context (one-shot), the same way ambient standing context is
+        # surfaced. Consumed once so later turns are not re-briefed.
+        if self._pending_session_brief:
+            packet.relevant_recall = [self._pending_session_brief] + list(
+                packet.relevant_recall or []
+            )
+            self._pending_session_brief = None
 
         intent = self._classify_intent(text, packet)
 

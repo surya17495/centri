@@ -185,6 +185,8 @@ class Runtime:
             memory_brief=self.memory_brief,
             curator=self.curator,
             temporal_narrator=self.temporal_narrator,
+            proactive_brief=self.proactive_brief,
+            session_brief_enabled=settings.session_brief,
         )
 
         # 15. Wire event bus -> hot cache
@@ -199,6 +201,16 @@ class Runtime:
 
         # 17. Start scheduler
         await self.scheduler.start()
+
+        # 18. Session-start push briefing (Increment 2). Build the deterministic,
+        # LLM-free proactive brief and surface it unprompted — emitted as a
+        # brief.session_start spine event (shells render it) and stashed for the
+        # first turn's curated context. Default on; CENTRI_SESSION_BRIEF=0 disables.
+        # Never fatal to boot.
+        try:
+            await self.coordinator.emit_session_brief()
+        except Exception:
+            logger.debug("Session-start brief emission failed", exc_info=True)
 
         logger.info("CENTRI booted.")
 
