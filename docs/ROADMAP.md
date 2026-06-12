@@ -100,6 +100,21 @@ ratified. They make the cheap-now / expensive-later moves immediately.
     must be **pinned, local, and policy-stamped**. **No LLM judgment at read
     time** (reaffirms Decision 7). (Implementation is Phase 1 / 3c.1.)
 
+### Decision (ratified 2026-06-12, owner)
+
+13. **Photographic storage, human recall.** The spine is **photographic**:
+    append-only, nothing is ever deleted; supersession retains history; digests
+    are *derived views*; everything is re-derivable from the ledger. Recall is
+    **human**: gist-first via curated, budgeted briefs with **zoom-in-on-demand**
+    — and the zoom never fails, because every gist line carries a
+    `source_event_id` receipt to verbatim ground truth. **Forgetting is a
+    READ-TIME PRESENTATION POLICY, never write-time deletion.** The tiered digests
+    of 3c.1 are the *gist layer over a lossless spine*, not "forgetting for
+    realism." *The vision sentence: remembers everything verbatim, recalls like a
+    person, verifies like a machine.* This decision reframes 3c.1's digests
+    (derived views, never lossy storage) and is the structural reason curation
+    quality must be **identical in chat and coding** — see 3c.0.2.
+
 ## Phase 0 — Foundation (this phase)
 
 Port the HAL core into the `centri` package and establish the interfaces the rest
@@ -288,12 +303,28 @@ history-independent.
   replay tuning. The cue-expansion LLM seam is honest-unavailable (logged
   expansion terms, deterministic fallback). Wired into the live
   `build_delegation_brief()` path, not a side module. **Done (2026-06-12).**
+- **3c.0.2 Universal per-turn curation.** Memory quality must be **identical in
+  chat and coding** (Decision 13) — the chat/coding asymmetry is the biggest seam
+  against the vision. Today the full `curate()` brief (ambient + cued layers,
+  receipts, miss/waste) fires only on coding delegation
+  (`build_delegation_brief`); plain chat turns get only
+  `memory.recall(text, limit=3)`, often served stale from the hot cache. Fix:
+  **every** utterance flows through the same `Curator` when wired — chat turns
+  (`_handle_general`, and status/steering as appropriate) get the same curated
+  ambient+cued brief, with receipts and `curation.brief`/miss-waste
+  instrumentation, as coding delegation (so 3c.1 replay covers chat). `curate()`
+  stays pure; the hot-cache fast path may still serve the AMBIENT layer instantly,
+  but the cued layer comes from the live curator per turn (latency tradeoff
+  documented honestly). `MemoryBriefAssembler` stays the bench fallback.
 - **3c.1 Replay harness + quality-per-token bench + write-time embeddings.** A
   replay harness drives recorded spines + cues through `curate()` and scores
   quality-per-token against the `curation.miss`/`curation.waste` ledger; tiered
   daily→weekly digests + entity pages maintained by supersession (digest
   summarizer behind an optional LLM seam with a deterministic fallback, per
-  Decision 3); **write-time embeddings** stored on candidates so stored-vector
+  Decision 3). Per Decision 13 the digests are **derived views over a lossless
+  spine** — the gist layer, never write-time deletion; the spine stays
+  photographic and every digest line keeps a receipt back to verbatim ground
+  truth. **Write-time embeddings** stored on candidates so stored-vector
   similarity slots into the ranker as pure arithmetic (the Cue/candidate
   interfaces in 3c.0 are already shaped for it).
 - **3c.2 Temporal queries.** "What changed since X", "where did we leave off"

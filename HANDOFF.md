@@ -88,6 +88,19 @@ Phase A (ratified 2026-06-12) — see `docs/VISION.md` + `docs/ROADMAP.md`
     pinned/local/policy-stamped; NO LLM at read time (reaffirms #7). Impl =
     Phase 1 / 3c.1.
 
+Decision (ratified 2026-06-12, owner):
+
+13. **Photographic storage, human recall.** Spine is photographic (append-only,
+    nothing deleted, supersession retains history, digests are derived views,
+    everything re-derivable). Recall is human (gist-first curated/budgeted briefs
+    with zoom-in-on-demand that never fails — every gist line carries a
+    `source_event_id` receipt to verbatim ground truth). **Forgetting is a
+    READ-TIME PRESENTATION POLICY, never write-time deletion.** 3c.1 tiered digests
+    = the gist layer over a lossless spine, not "forgetting for realism." Sentence:
+    *remembers everything verbatim, recalls like a person, verifies like a
+    machine.* Structural reason curation quality must be identical in chat and
+    coding (→ 3c.0.2).
+
 **Phase A is DONE (2026-06-12):** master plan (`docs/VISION.md`), the four
 decisions above (`docs/ROADMAP.md` → "Decisions (Phase A)"), the tenancy-key
 migration (Unit 3, code + 6 tests), and the owner verification checklist
@@ -243,6 +256,18 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
       digest/drop/floor in real tokens, ambient load/render/exclusion, miss/waste,
       expander honesty, Curator, TokenCounter determinism/fallback/stamp, and a
       byte-identical golden snapshot pinned to `POLICY_VERSION`). pytest 202/202.
+- [ ] **3c.0.2 Universal per-turn curation** — memory quality must be identical
+      in chat and coding (Decision 13); the chat/coding asymmetry is the biggest
+      seam against the vision. Today the full `curate()` brief (ambient + cued,
+      receipts, miss/waste) fires only on coding delegation
+      (`build_delegation_brief`); plain chat turns get only
+      `memory.recall(text, limit=3)`, often stale from the hot cache. Route EVERY
+      utterance through the same `Curator` when wired — chat (`_handle_general`,
+      status/steering as appropriate) gets the same curated ambient+cued brief,
+      receipts, and `curation.brief`/miss-waste instrumentation as delegation.
+      Keep `curate()` pure; hot-cache fast path may serve the AMBIENT layer
+      instantly but the cued layer comes from the live curator per turn (latency
+      tradeoff documented). `MemoryBriefAssembler` stays the bench fallback.
 - [ ] **3c.1 Replay harness + quality-per-token bench + write-time embeddings** —
       replay recorded spines + cues through `curate()`, score quality-per-token
       against the `curation.miss`/`curation.waste` ledger; tiered daily→weekly
@@ -282,9 +307,15 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
   retrieval, #9–12 above); tenancy-key migration (`tenant_id` default `"local"`
   on events + graph tables, threaded through the query layer, additive ALTER
   preserves existing DBs); `VERIFY.md` owner real-machine checklist (Phase 0 gate).
-  pytest 208/208, vitest 14/14, tsc/build clean.
-- **Next:** 3c.1 / Phase 1 (memory completion) — replay harness +
-  quality-per-token bench + write-time embeddings (per the work queue below).
+  pytest 208/208, vitest 14/14, tsc/build clean. **Decision 13 ratified
+  (2026-06-12):** "Photographic storage, human recall" — spine photographic
+  (append-only, lossless, re-derivable), recall human (gist-first curated briefs
+  w/ receipt-backed zoom); forgetting is a read-time policy, never write-time
+  deletion; 3c.1 digests are derived views. Work item **3c.0.2 universal per-turn
+  curation** inserted ahead of 3c.1.
+- **Next:** 3c.0.2 universal per-turn curation (route chat turns through the same
+  `curate()` Curator path as coding delegation), then 3c.1 / Phase 1 (replay
+  harness + quality-per-token bench + write-time embeddings).
 - **Layout:** `core/` Python FastAPI (src/centri/: app.py, db.py, coordinator,
   consolidation, memory_graph, memory_brief, curation, briefing, opencode_config,
   models_catalog, model_router, hands/, ingest/ [base + registry +

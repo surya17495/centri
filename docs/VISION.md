@@ -17,6 +17,14 @@ Owner: surya. Repo: https://github.com/surya17495/centri.
   rejections, conventions, open loops, the narrative of the work — and pulls the
   right context *before the user has to ask*. State lives in an append-only event
   ledger and a derived, re-derivable graph, never in conversation buffers.
+  **Photographic storage, human recall** (Decision 13, ratified 2026-06-12): the
+  spine is photographic (append-only, nothing deleted, everything re-derivable);
+  recall is human (gist-first curated briefs with zoom-in-on-demand that never
+  fails, because every gist line carries a `source_event_id` receipt to verbatim
+  ground truth). Forgetting is a *read-time presentation policy*, never write-time
+  deletion — tiered digests are the gist layer over a lossless spine.
+  *The sentence: remembers everything verbatim, recalls like a person, verifies
+  like a machine.*
 - **Shared-core continuity.** One memory and one server behind every client
   (desktop / web / mobile). Separation lives only in the chat UI. **No sync
   layer, no offline cache, no conflict resolution** unless a hosted/offline
