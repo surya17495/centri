@@ -68,6 +68,26 @@ Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
    ranked retrieval. Waking-up + spontaneous association = same machinery,
    unprompted, queued into 3d.
 
+Phase A (ratified 2026-06-12) — see `docs/VISION.md` + `docs/ROADMAP.md`
+"Decisions (Phase A)":
+
+9. **Tenancy key now.** Every spine/graph row carries `tenant_id` (default
+   `"local"`). Schema + event envelope + all NEW queries include it from now on;
+   single-tenant paths may ignore it. Free now, painful migration later;
+   prerequisite for hosted mode. Key now; enforcement is Phase 6.
+10. **Voice transport = WS audio (v1).** Audio frames over the existing event
+    socket family (self-hosted LAN/localhost dominant; no NAT, one fewer infra
+    dep). WebRTC/LiveKit only if hosted demands it. STT local-first, pinned model,
+    policy-stamped. Impl = Phase 5.
+11. **Tool abstraction (contract, spec only).** Tools = first-class contract
+    parallel to Hand: every invocation is an event w/ receipts; side-effectful
+    tools need an approval-gate event before execution; output ingestible by
+    consolidation. Playwright first. Impl = Phase 4.
+12. **Retrieval = TEMPR-shaped, deterministic.** Multi-retriever (lexical /
+    graph-hop / temporal / stored-vector) + RRF, pure arithmetic; any reranker
+    pinned/local/policy-stamped; NO LLM at read time (reaffirms #7). Impl =
+    Phase 1 / 3c.1.
+
 ## Work queue (do in order; each is one commit+push)
 
 - [x] **3b.1 Full hand transcripts** — DONE. Both hands now record a

@@ -71,6 +71,35 @@ below.
    item as an aside) — run on this same machinery and are queued into 3d as the
    proactivity track.
 
+### Decisions (ratified 2026-06-12, Phase A)
+
+Four structural decisions made when the master plan (`docs/VISION.md`) was
+ratified. They make the cheap-now / expensive-later moves immediately.
+
+9. **Tenancy key now.** Every spine/graph row carries a `tenant_id` (default
+   `"local"`). Single-tenant code paths may ignore it, but the schema, the event
+   payload envelope, and **all new queries include it from now on**. *Rationale:*
+   it is free to add today and a painful global migration later; it is the
+   prerequisite for hosted mode (Phase 6). The key is laid down now; *enforcement*
+   on every query path is Phase 6, not this decision.
+10. **Voice transport = WebSocket audio (v1).** Voice audio frames ride the
+    existing event-socket family for v1. *Rationale:* self-hosted LAN/localhost is
+    the dominant case, so there is no NAT traversal to solve and one fewer infra
+    dependency than WebRTC/LiveKit — which is reconsidered only if/when hosted mode
+    demands it. STT is **local-first with a pinned model** (whisper-class),
+    recorded like other policy stamps. (Implementation is Phase 5.)
+11. **Tool abstraction (contract).** Tools are a **first-class contract parallel
+    to Hand**: every tool invocation is an event with receipts; side-effectful
+    tools require an **approval-gate event before execution**; tool output is
+    ingestible by consolidation. Playwright is the first Tool. *This decision is
+    spec only* — implementation is Phase 4.
+12. **Retrieval = TEMPR-shaped, deterministic.** Adopt the proven multi-retriever
+    + Reciprocal Rank Fusion pattern (Hindsight/Graphiti-validated) implemented
+    over the spine: four parallel deterministic retrievers (lexical, graph-hop,
+    temporal, stored-vector semantic) fused by **pure arithmetic**. Any reranker
+    must be **pinned, local, and policy-stamped**. **No LLM judgment at read
+    time** (reaffirms Decision 7). (Implementation is Phase 1 / 3c.1.)
+
 ## Phase 0 — Foundation (this phase)
 
 Port the HAL core into the `centri` package and establish the interfaces the rest
