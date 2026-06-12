@@ -8,7 +8,7 @@ Owner: surya (surya.munna95@gmail.com). Repo: https://github.com/surya17495/cent
    of work). Pushed code is the only safe code; the session may die any time.
    Git identity: `-c user.name="surya17495" -c user.email="surya.munna95@gmail.com"`.
 2. **Quality gates before every push:** `cd core && python -m pytest tests/ -q`
-   (currently 202 passed) and, if `shell/` was touched,
+   (currently 208 passed) and, if `shell/` was touched,
    `cd shell && npm run typecheck && npm run test && npm run build` (14 tests).
 3. **Be honest** in README/docs/reports about sandbox-verified vs
    needs-local-build (Tauri binary, real opencode binary, systemd/Caddy on a VM).
@@ -87,6 +87,28 @@ Phase A (ratified 2026-06-12) — see `docs/VISION.md` + `docs/ROADMAP.md`
     graph-hop / temporal / stored-vector) + RRF, pure arithmetic; any reranker
     pinned/local/policy-stamped; NO LLM at read time (reaffirms #7). Impl =
     Phase 1 / 3c.1.
+
+**Phase A is DONE (2026-06-12):** master plan (`docs/VISION.md`), the four
+decisions above (`docs/ROADMAP.md` → "Decisions (Phase A)"), the tenancy-key
+migration (Unit 3, code + 6 tests), and the owner verification checklist
+(`VERIFY.md`). The phase numbering is now mapped onto VISION.md's Phases 0–6;
+the work queue below is the same items under that mapping. **Next = 3c.1 /
+Phase 1 (memory completion).**
+
+## Phase 0 — real-machine verification (owner-run gate)
+
+`VERIFY.md` (repo root) is the owner's ~1-hour real-machine pass. It turns every
+"fixture-verified only" claim into "verified on real machine." Fill this table as
+each step is run; any `no` keeps that demo claim hedged until it flips.
+
+| Step | What it proves | Verified on real machine | Notes |
+| --- | --- | --- | --- |
+| 1 install + boot core+shell | documented quick-start starts on a real OS | _pending_ | |
+| 2 discovery + bootstrap | real OpenCode/Claude Code/Cursor data imports w/ receipts | _pending_ | clears "adapters fixture-verified only" |
+| 3 real ACP coding task | `opencode acp` binary drives a task; transcript+fact fold | _pending_ | clears "real-binary ACP pending" (Decision 2) |
+| 4 provider reuse | OpenCode providers reused, no re-entered keys | _pending_ | clears "opencode config fixture-verified only" |
+| 5 curation recall | real-history recall w/ receipts, no visible remembering | _pending_ | confirms Decisions 7 & 8 on real data |
+| 6 Tauri build + models.dev | desktop bundle builds; live catalog fetch | _pending_ | clears "Tauri binary / models.dev live" |
 
 ## Work queue (do in order; each is one commit+push)
 
@@ -255,16 +277,21 @@ Phase A (ratified 2026-06-12) — see `docs/VISION.md` + `docs/ROADMAP.md`
   deterministic-curation + no-visible-remembering/ambient) — see
   `docs/ROADMAP.md` → "Decisions". 3c.0.1 added real tiktoken (`o200k_base`)
   token budgeting behind a stamped `TokenCounter` (honest word-count fallback).
-  pytest 202/202, vitest 14/14, tsc/build clean.
-- **Next:** 3c.1 replay harness + quality-per-token bench + write-time
-  embeddings (per the revised work queue below).
+  **Phase A (2026-06-12):** `docs/VISION.md` end-to-end master plan; four ratified
+  structural decisions (tenancy key / voice transport / tool abstraction / TEMPR
+  retrieval, #9–12 above); tenancy-key migration (`tenant_id` default `"local"`
+  on events + graph tables, threaded through the query layer, additive ALTER
+  preserves existing DBs); `VERIFY.md` owner real-machine checklist (Phase 0 gate).
+  pytest 208/208, vitest 14/14, tsc/build clean.
+- **Next:** 3c.1 / Phase 1 (memory completion) — replay harness +
+  quality-per-token bench + write-time embeddings (per the work queue below).
 - **Layout:** `core/` Python FastAPI (src/centri/: app.py, db.py, coordinator,
   consolidation, memory_graph, memory_brief, curation, briefing, opencode_config,
   models_catalog, model_router, hands/, ingest/ [base + registry +
   opencode/claude_code/cursor/generic adapters], bench/);
   `shell/` React+TS+Tailwind (+ Tauri scaffold; components/OnboardingCard);
-  `deploy/` VM bundle; `docs/` architecture/roadmap/memory/bench/event-contract/
-  ingestion-adapters.
+  `deploy/` VM bundle; `docs/` architecture/roadmap/vision/memory/bench/
+  event-contract/ingestion-adapters; `VERIFY.md` (repo root) = Phase 0 checklist.
 - **Run locally (sandbox):** backend
   `env LITELLM_BASE_URL=http://127.0.0.1:4999/v1 LITELLM_API_KEY=test-proxy-key CENTRI_AUTONOMY_LEVEL=supervised python -m uvicorn centri.app:app --host 127.0.0.1 --port 8787`
   from `core/` (fake proxy URL → all role models report configured; supervised →
