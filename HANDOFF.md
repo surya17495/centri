@@ -469,6 +469,32 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
       wired, the intent never fires (falls through to general). Tests:
       `test_temporal.py` (20: 16 core + 4 intent-matcher), `test_centri.py::TestTemporal`
       (5: 2 endpoint shape + 1 where-left-off + 2 chat-routing). pytest 299/299.
+- [ ] **Phase 4 / Tool contract (Decision 11)** — IN PROGRESS (2026-06-12).
+      Tools = first-class contract parallel to Hand: every invocation is an event
+      with receipts; side-effectful tools round-trip the existing approval gate;
+      output folds into memory via a consolidation fact hint. Composio is the
+      first provider, Tavily search the demo tool.
+      - [x] **Step 1 — Tool contract core** — DONE (2026-06-12). New package
+            `core/src/centri/tools/` (`base.py`): `ToolSpec` / `ToolResult` /
+            `ToolProvider` ABC (honest `available()` + reason) and `ToolRegistry`.
+            `registry.invoke()` is the ONLY execution path: emits `tool.requested`
+            (via `db.append_event` so redaction runs + tenant_id carried), gates
+            side-effectful tools through the SAME approval-gate callable hands use
+            (deny/timeout/no-gate => `tool.denied`, honest failure, no execution;
+            read-only slugs skip the gate via `is_read_only_slug`), executes via the
+            provider, then emits `tool.completed`/`tool.failed` with a 240-char
+            summary + full output and a deterministic `fact` hint
+            (`topic: tool:<provider>:<name>`, tags `[tool, <provider>]`) that
+            consolidation folds into the graph with a receipt (mirrors
+            `hand.transcript`). Zero providers / unknown tool / unavailable provider
+            are all honest-unavailable, never faked. Tests: `test_tools.py` (13:
+            read-only classification, zero-provider honest-unavailable, unavailable
+            provider never executes, read-only skips gate, side-effect deny/no-gate
+            blocks execution, allow executes, provider failure => tool.failed, fact
+            hint folds into graph w/ receipt, failed invocation writes no fact,
+            secret in output redacted before persistence). pytest 347/348 (1 skip).
+      - [ ] **Step 2 — Composio provider** (`tools/composio.py`, mocked-HTTP tests).
+      - [ ] **Step 3 — API + coordinator wiring** (`GET /tools`, `POST /tools/invoke`).
 - [ ] **3d.1 Waking-up + spontaneous association** — the "feels human"
       proactivity track on 3c.0's machinery: waking-up situating brief on first
       interaction of a session/day, spontaneous association surfacing an
@@ -574,6 +600,18 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
   Same `(graph, anchor)` → byte-identical render (no `now()`/calendar/LLM at read
   time). Tests: `test_temporal.py` (20), `test_centri.py::TestTemporal` (5).
   pytest 299/299.
+- **Phase 4 / Tool contract Step 1 DONE (2026-06-12):** `centri/tools/`
+  (`base.py`) lands the first-class tool contract (Decision 11). `ToolRegistry.invoke`
+  is the single execution path — `tool.requested` → (approval gate for
+  side-effectful tools) → provider exec → `tool.completed`/`tool.failed`/`tool.denied`,
+  all written through `db.append_event` (redaction + tenant_id). The completion
+  event carries a deterministic `fact` hint (`tool:<provider>:<name>`, tags
+  `[tool, <provider>]`) folded by consolidation with a receipt, mirroring
+  `hand.transcript`. Read-only slugs (SEARCH/GET/LIST/FETCH/…) skip the gate;
+  everything else is conservatively side-effectful. Honest-unavailable throughout
+  (zero providers, unknown tool, no-key provider — never faked). New contract: tool
+  events on the spine, approval-gated side effects, fact-hint folding. Composio
+  provider (Step 2) + REST endpoints (Step 3) next. pytest 347/348 (1 skip).
 - **North star v2 (Decision 14, ratified 2026-06-11 PT):** CENTRI is a
   **reasoning partner** — conversational seamlessness first-class, thinks like a
   human with machine superpowers (memory bandwidth, VM tool use, voice). Docs
