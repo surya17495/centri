@@ -433,6 +433,23 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
       within CENTRI's known-good path; **failures are 3e FINDINGS, not bugs to
       hide** (anti-gaming rule), and emerge once real Hermes material is seeded.
       pytest 275/275.
+- [ ] **3c.2 Temporal narrative** — "what changed since X" + "where did we leave
+      off", a DERIVED VIEW over the photographic spine + bi-temporal graph
+      (Decision 13). **Slice 1 DONE (2026-06-12):** `centri/temporal.py`
+      (`TemporalNarrator`, beside `curation_replay.py` so the golden read-surface
+      is untouched). `changed_since(anchor)` diffs the live graph against an ISO
+      anchor — additions (created after), supersessions (invalidated after,
+      rendered old→new with the NEW value's receipt), open-loop status changes
+      (new/revisited/completed/parked); an in-window supersession suppresses the
+      target's standalone "added" line (narrate the change once). `where_left_off()`
+      = resume view: anchors on the last real activity event (skips derived
+      `curation.*`/`memory.synthesized`), surfaces still-open loops + latest
+      decisions + the last event, every line receipted. `resolve_anchor` accepts
+      ISO date / full ISO / `last-session` (idle-gap scan on the spine) / origin.
+      **Purity:** ISO sorts lexically so the diff is pure string compare — no
+      `now()`, no calendar lib, no LLM; same `(graph, anchor)` → byte-identical
+      render. Slices 2–3 (endpoint wiring + chat-intent routing) pending. Tests:
+      `test_temporal.py` (16).
 - [ ] **3d.1 Waking-up + spontaneous association** — the "feels human"
       proactivity track on 3c.0's machinery: waking-up situating brief on first
       interaction of a session/day, spontaneous association surfacing an
