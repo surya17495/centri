@@ -1,63 +1,74 @@
 # CENTRI
 
-CENTRI is a voice-first, stateful, ambient builder agent for technical founders.
-You talk to it about what you're building; it delegates the actual coding to
-external coding agents and keeps durable, auditable track of everything that
-happens. It is model-agnostic — bring your own LLM stack (BYOK) or, later, use a
-bundled subscription.
+**A memory-first, stateful agent with one core and a photographic memory of everything
+you and your coding agents have done.** CENTRI remembers; it delegates the real work to
+coding agents (OpenCode over ACP) and tools (Composio), and folds every result back into
+a single, durable memory.
 
-Coding work is delegated through a **hand** abstraction. Every hand is uniformly
-*an ACP agent (Agent Client Protocol, JSON-RPC over stdio) identified by a launch
-command* — the client streams live progress and round-trips destructive-action
-permission requests through CENTRI's approval gate. The **canonical default hand
-is OpenCode-over-ACP** (`CENTRI_ACP_COMMAND=opencode acp`); other agents (Cursor,
-Claude Code, …) are config entries, not new code — just point the command
-elsewhere. The native OpenCode CLI subprocess hand is retained as a **degraded
-fallback** for when no ACP peer is reachable.
+## Why
 
-The core design principle is that **events are the source of truth; memory is a
-derived, re-derivable index.** Every runtime event is written to an append-only
-SQLite ledger (after secret redaction), and CENTRI's memory — core context blocks
-and archival facts — is a projection that can be thrown away and rebuilt by
-replaying that ledger. Nothing in memory is authoritative; the spine is.
+Agents forget. Context windows fill, sessions die, and every new chat starts cold — so
+you re-explain decisions you already made and watch the agent re-propose approaches you
+already rejected. CENTRI inverts this: an append-only **event ledger** is the source of
+truth, **memory is a derived index** that can be thrown away and re-derived from the
+ledger, and every per-turn context is **assembled fresh** by a deterministic curation
+function that attaches a receipt to every line. The context window is a cache, not
+storage.
+
+## Key capabilities
+
+- **Typed memory graph with bi-temporal supersession** — decisions, facts, and open
+  loops. New truth invalidates old truth, but history is retained: stale facts never
+  resurface in a brief, while the full timeline stays auditable.
+- **Deterministic curation with receipts** — each per-turn brief is rendered by one
+  `curate()` path, and every line carries a `source_event_id` pointing back to the
+  ledger event it came from. The same `(graph, cue, budget, policy)` yields a
+  byte-identical brief.
+- **Imports existing histories** — one-shot bootstrap plus a continuous tail of your
+  OpenCode, Claude Code, and Cursor histories, so a fresh install starts with complete
+  memory instead of a blank slate.
+- **Temporal recall** — ask "what changed since yesterday" or "where did we leave off"
+  and get an answer grounded in the ledger's timeline, not a guess.
+- **Coding delegation over ACP** — work is handed to a coding agent (Agent Client
+  Protocol, JSON-RPC over stdio) with live streaming progress, an approval gate for
+  destructive actions, and automatic failover to a fallback hand when the primary peer
+  is unreachable.
+- **First-class tool contract** — tools (Composio, e.g. Tavily search) sit beside the
+  coding hands. Every invocation is event-ledgered, side-effectful tools pass through
+  the approval gate, read-only results are folded back into the memory graph.
+- **Multi-client** — any shell (desktop or web) talks to the same core over a
+  bearer-authenticated API; nothing client-side is authoritative.
+- **Benchmarked** — composite **1.00** vs a **real Letta server** at **0.93**, the gap
+  entirely on stale-fact supersession. See [`docs/centri-bench.md`](docs/centri-bench.md).
 
 ## Architecture
 
-| Layer        | Status                        | What it is                                                        |
-|--------------|-------------------------------|-------------------------------------------------------------------|
-| Shell        | Phase 1: React verified, Tauri scaffolded | Tauri 2 + React desktop surface (text now, voice later) |
-| Coordinator  | working                       | Python core: understand → decide → act → narrate → remember       |
-| Event spine  | working                       | SQLite append-only ledger + in-memory bus, **redaction on write** |
-| Memory       | Phase 2: typed graph + cue injection | Derived, re-derivable index over the spine; typed decisions/facts/open-loops with supersession; Letta adapter optional |
-| Hands        | ACP + OpenCode working        | Capability router over the `Hand` ABC; ACP preferred, OpenCode fallback |
+Events are the source of truth; memory is a derived, re-derivable index over them.
+
+| Layer        | What it is                                                                       |
+|--------------|----------------------------------------------------------------------------------|
+| Shell        | Tauri 2 + React desktop/web surface — activity timeline, task cards, approvals   |
+| Coordinator  | Python core loop: understand → decide → act → narrate → remember                 |
+| Event spine  | Append-only SQLite ledger + in-memory bus, with secret redaction on write        |
+| Memory       | Typed decisions/facts/open-loops with bi-temporal supersession, derived from the spine |
+| Hands        | Capability router over coding agents — ACP preferred, native OpenCode fallback   |
+| Tools        | `ToolProvider` contract with Composio; event-ledgered, approval-gated invocation |
 
 See [`docs/architecture.md`](docs/architecture.md),
+[`docs/memory-architecture.md`](docs/memory-architecture.md),
 [`docs/event-contract.md`](docs/event-contract.md), and
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for detail.
 
-## Memory
+## Quickstart
 
-Events are the source of truth; memory is a derived, re-derivable index. Memory is
-modeled as four systems (episodic, semantic+supersession, prospective, procedural)
-captured at the moment work happens and injected into hand briefs without the user
-having to ask. Phase 0 ships the substrate (`MemoryStore`, `rebuild_from_events()`).
-Phase 2 implements the typed memory graph (decisions/facts/open-loops with
-bi-temporal supersession), the consolidation worker ("sleep cycle") that folds
-event hints into that graph, cue-driven brief assembly, proactive briefing with
-dormancy detection, and `centri-bench` — the falsifiable benchmark. The design and
-benchmark are specified in
-[`docs/memory-architecture.md`](docs/memory-architecture.md) and
-[`docs/centri-bench.md`](docs/centri-bench.md).
-
-Run the benchmark:
+### Docker
 
 ```bash
-cd core
-python -m centri.bench.run            # human-readable report
-python -m centri.bench.run --json     # machine-readable scores
+cp .env.example .env        # fill in your model gateway keys (BYOK)
+docker compose up -d        # core on :8760, web shell on :8761
 ```
 
-## Dev setup
+### Manual
 
 ```bash
 cd core
@@ -65,225 +76,36 @@ python -m venv .venv
 . .venv/bin/activate
 pip install -e ".[dev]"
 
-# configure (BYOK): copy the example and fill in your keys
-cp ../.env.example ../.env
-
-# run the tests
-python -m pytest tests/ -v
-
-# start the server
-centri          # or: python -m centri.cli
+cp ../.env.example ../.env  # fill in your keys (BYOK)
+python -m pytest tests/ -v  # run the suite
+centri                      # start the server (or: python -m centri.cli)
 ```
 
-The API listens on `127.0.0.1:8760` by default. Quick check:
+The API listens on `127.0.0.1:8760` by default. Health checks:
 
 ```bash
 curl localhost:8760/health
 curl localhost:8760/status
 ```
 
-## What works now (honest)
-
-This distinguishes **sandbox-verified** (proven in CI/the dev sandbox) from
-**needs-local-build** (correct by construction but requires a toolchain not present
-in the sandbox — namely Rust/cargo for the Tauri desktop binary).
-
-- **Sandbox-verified (backend):** event spine with redaction-before-persistence;
-  FastAPI app with `/health`, `/status`, `/utterance`, tasks/approvals/threads/events,
-  `/events/stream` WebSocket; coordinator intent → handoff → job loop; the **real ACP
-  hand** speaking JSON-RPC over stdio (initialize → session lifecycle → prompt turns,
-  streaming `session/update` → live `task.progress`/`hand.progress`, permission
-  requests → approval gate, cancellation); router prefers a healthy ACP hand and falls
-  back to the OpenCode subprocess; delegation-brief seam enriching hand briefs with
-  recent task summaries; SQLite memory store with `rebuild_from_events()`; BYOK model
-  router. Covered by `pytest core/tests/` (275 tests incl. ACP client tests against a
-  scripted fake agent, plus the Phase 2 memory suite) and the end-to-end
-  `scripts/smoke_phase1.sh` (command → task → streamed events → approval round-trip
-  over a live WebSocket).
-- **Sandbox-verified (coding-loop hardening, 2026-06-12):** the ACP hand is now
-  exercised against the **real `opencode` binary (v1.17.4)** end-to-end — a live
-  `initialize → session/new → session/prompt → completed` lifecycle, not just the
-  fake agent (`test_acp_hand.py::test_real_opencode_acp_lifecycle`, runs unskipped
-  when `opencode` is on PATH). **ACP error-path conformance** proves the hand stays
-  honest under malformed JSON-RPC, an agent that crashes mid-turn, a hung agent
-  (bounded by `prompt_timeout`), oversized stream frames, permission-request timeout,
-  cancellation races, and restart between turns — each yields an honest event and a
-  recoverable state, never a silent stall or fake success. An **end-to-end failover
-  drill** (`test_failover.py`) kills ACP mid-task and proves the router degrades to
-  the OpenCode fallback with an honest `hand.degraded` trail and **no orphaned running
-  task**; when no fallback remains the task fails honestly. Two real production bugs
-  were found and fixed in this pass: the ACP stdio reader's 64 KiB line limit (would
-  break the hand on legitimate large frames — now 16 MiB) and a missing `await` in
-  `build_delegation_brief` (the live coding path handed a coroutine to the hand as its
-  intent instead of the rendered brief).
-- **Sandbox-verified (Phase 2 memory):** typed memory graph (`memory_graph.py`) with
-  decisions/facts/open-loops and bi-temporal supersession (new truth invalidates old,
-  history retained, live view shows only current); consolidation worker
-  (`consolidation.py`) folding typed event hints into the graph and re-deriving it
-  from the ledger via `rebuild_from_events()`; cue-driven brief assembly
-  (`memory_brief.py`) wired into `build_delegation_brief()`; proactive briefing
-  (`GET /briefing`) and memory inspection (`GET /memory/graph`); scheduler dormancy
-  detection (one yes/no line per dormant loop, surfaced once). Falsifiable via
-  `centri-bench` (`python -m centri.bench.run`): native CENTRI scores **1.00**
-  composite vs a **real Letta server** (pgvector archival, `letta_http` mode) at
-  **0.93**, with the gap on stale-fact supersession (native 1.00 vs Letta 0.67) — the
-  central thesis. See the honest accounting below.
-- **Sandbox-verified (curation parity, 2026-06-12):** chat turns and coding/delegation
-  turns are proven to draw from **one** deterministic `curate()` path (Decision 13 —
-  identical curation quality in both modes), rendering a **byte-identical** brief for
-  the same `(graph, cue, budget, policy)`, both carrying `source_event_id` receipts and
-  matching policy identity, differing only in the `turn_kind` stamp. A coding turn emits
-  exactly one (`delegation`) brief and a chat turn exactly one (`chat`) — no double
-  counting (`test_curation_parity.py`).
-- **Scaffolded (3e continuity gate, 2026-06-12):** a continuity regression gate
-  (`python -m centri.bench.run --suite continuity`, `bench/continuity.py`) with four
-  Hermes-motivated failure-mode suites — unprompted cross-session awareness, fact
-  supersession under config churn, cold-start recall on a fresh client, and awareness
-  of delegated-session work — each scored honestly through the production cold-start
-  path. **Personas are explicit `# TODO(owner)` stubs** awaiting real Hermes transcript
-  material; the methodology is real and under test (`test_continuity.py`), and failing
-  suites are treated as 3e *findings*, never tuned away.
-- **Sandbox-verified (shell frontend):** the React app in `shell/` builds and
-  typechecks (`tsc --noEmit` + `vite build`) and runs in a plain browser via
-  `npm run dev` — activity timeline, streaming task cards, inline approval cards,
-  command bar, status strip, settings panel. Component tests pass under vitest.
-- **Sandbox-verified (Phase 3a deployment hardening):** shared-secret bearer auth
-  (`CENTRI_AUTH_TOKEN`) on every REST route except `/health`, token-gated
-  `/events/stream` WebSocket (`?token=`, since browsers cannot set WS headers),
-  constant-time comparison, 401s that still carry CORS headers — covered by
-  `TestAuth` (5 tests) and verified live (curl 401/200, WS handshake 403→101, full
-  shell journey against a secured core with the token entered in Settings). The
-  glassmorphism shell ships an Auth token field under Settings → Backend.
-- **Needs a real VM (Phase 3a, honest):** [`deploy/`](deploy/README.md) provides an
-  idempotent `install.sh` (venv + env file with generated token + systemd unit +
-  Caddy auto-TLS reverse proxy), `centri.service`, and a `Caddyfile`. The script is
-  syntax-checked and the auth flow it configures is sandbox-verified, but systemd
-  lifecycle, Caddy install, and Let's Encrypt issuance need a real Ubuntu VM with a
-  domain.
-- **Needs-local-build:** the Tauri 2 desktop wrapper (`shell/src-tauri/`). Fully
-  scaffolded (single resizable window, 480px min, dark theme, capabilities,
-  global-shortcut stub) but `cargo`/Rust is not available in the sandbox, so
-  `npm run tauri build` must be run on a machine with the Rust toolchain. See
-  [`shell/README.md`](shell/README.md).
-- **Sandbox-verified (Phase 4 tools slice, Decision 11):** a first-class **Tool
-  contract** (`tools/base.py`) parallel to the Hand contract — `ToolProvider`
-  (available / list / execute), `ToolSpec`, `ToolResult`, and a `ToolRegistry` whose
-  `invoke()` is the single execution path: it emits `tool.requested` →
-  (approval gate for side-effectful slugs) → `tool.completed`/`failed`/`denied` on the
-  append-only spine, folds a `fact` hint from completed read-only results into the
-  memory graph, and classifies SEARCH/GET/LIST/FETCH/READ/FIND/LOOKUP/QUERY slugs as
-  read-only (gate skipped). **Composio** is the first provider (`tools/composio.py`)
-  with **Tavily search** (`TAVILY_SEARCH`) as the demo tool. Surfaced at `GET /tools`
-  and `POST /tools/invoke`. Covered by `test_tools.py` (13), `test_tools_composio.py`
-  (13, fully mocked `httpx.MockTransport` — no network), and `test_centri.py::TestTools`
-  (5: endpoint shapes, invoke with a fake provider, auth enforced, unavailable reason
-  surfaced). **Honest-unavailable:** with no `CENTRI_COMPOSIO_API_KEY` the provider
-  reports unavailable-with-reason and never touches the network or fakes success; the
-  Composio HTTP seam is verified against a mocked transport, so a live call needs a real
-  key. Config (all optional, env-driven):
-
-  | Env var | Default | Purpose |
-  |---------|---------|---------|
-  | `CENTRI_COMPOSIO_API_KEY` (or `COMPOSIO_API_KEY`) | _(empty)_ | Composio API key; empty → honest-unavailable |
-  | `CENTRI_COMPOSIO_BASE_URL` | `https://backend.composio.dev/api/v3` | Composio API base |
-  | `CENTRI_COMPOSIO_USER_ID` | `default` | Composio connected-account user id |
-  | `CENTRI_COMPOSIO_TOOLS` | `TAVILY_SEARCH` | comma-separated allowlist of tool slugs |
-
-  Live Tavily search through Composio for the demo:
-
-  ```bash
-  export CENTRI_COMPOSIO_API_KEY=ak_your_key_here   # required for a real call
-  export CENTRI_COMPOSIO_TOOLS=TAVILY_SEARCH
-  # (optional) export CENTRI_COMPOSIO_USER_ID=your_connected_account_user_id
-  # start the core: uvicorn centri.app:app  (add -H "Authorization: Bearer $CENTRI_AUTH_TOKEN" below if auth is set)
-
-  curl -s http://127.0.0.1:8000/tools | jq            # TAVILY_SEARCH should show available:true
-  curl -s -X POST http://127.0.0.1:8000/tools/invoke \
-    -H 'content-type: application/json' \
-    -d '{"name": "TAVILY_SEARCH", "arguments": {"query": "latest on agentic AI"}}' | jq
-  ```
-- **Honest-unavailable:** voice endpoints (Phase 3); Letta semantic memory unless
-  `CENTRI_LETTA_URL` is configured. These report unavailable-with-reason rather than
-  faking success.
-- **Not here yet:** voice (Phase 3), subscriptions, packaging (Phase 4).
-
-### centri-bench: honest accounting
-
-The benchmark reproduces the methodology of [`docs/centri-bench.md`](docs/centri-bench.md)
-faithfully, with two documented deviations forced by the sandbox:
-
-- **LLM judge + deterministic rubric (both run).** The spec calls for LLM-judge
-  grading. `bench/judge.py` (`LLMJudge`, wired via the `set_judge()` seam) hands each
-  assembled brief and the persona ground truth to a chat model and asks for strict
-  JSON verdicts on the same metrics; it retries on malformed output and is env-driven
-  (`CENTRI_JUDGE_BASE_URL`, `CENTRI_JUDGE_MODEL`). Run it with
-  `python -m centri.bench.run --judge`. The deterministic rubric in `bench/scoring.py`
-  remains the default and the offline cross-check: it grades the same *structured*
-  ground truth (exact rejected approaches, required brief substrings, stale/current
-  pairs, the next step) authored in `bench/personas.py` *before* the implementation.
-  Run head-to-head against a **real Letta server** (`letta_http` mode, see the next
-  bullet), **both graders agree**: native composite **1.00** vs Letta **0.93**, with
-  the gap on stale-fact supersession (native 1.00 vs Letta 0.67). The judge
-  reproducing the rubric independently is the point — the deterministic rubric is not
-  a softer test, it is the judge's checklist made executable.
-
-  | Metric (avg over 3 personas) | native (det.) | native (judge) | Letta (det.) | Letta (judge) |
-  |------------------------------|:-------------:|:--------------:|:------------:|:-------------:|
-  | brief completeness ↑         | 1.00          | 1.00           | 1.00         | 1.00          |
-  | re-proposal rate ↓           | 0.00          | 0.00           | 0.00         | 0.00          |
-  | next-step correct ↑          | 1.00          | 1.00           | 1.00         | 1.00          |
-  | stale-fact correct ↑         | 1.00          | 1.00           | 0.67         | 0.67          |
-  | **composite ↑**              | **1.00**      | **1.00**       | **0.93**     | **0.93**      |
-
-  Judge model: `moonshotai/Kimi-K2.6` (temperature 0, strict JSON) via the sandbox
-  relay. Judge wiring is unit-tested with a mocked HTTP layer (`tests/test_judge.py`,
-  no network).
-- **Incumbents out of scope; Letta scored against a real Letta server.** Hermes,
-  Claude Code, and Cursor cannot ingest the typed event ledger, so they are out of
-  scope for an in-process harness — per the spec this handicap *is* the point. For
-  Letta we went past a local model and ran the head-to-head against a **real Letta
-  server** (v0.16.8), stood up in the sandbox with no Docker: embedded Postgres +
-  pgvector via the bundled `pgserver` binary, ORM-generated schema, the server
-  configured to use the relay for both its LLM and embeddings. `LettaMemoryStore`
-  routes to it over the `letta-client` SDK in `letta_http` mode
-  (`core/src/centri/letta_http.py`): archival facts become real pgvector-backed
-  *passages* retrieved by similarity, with no typed supersession. **The table above is
-  the `letta_http` result** — native composite **1.00** vs the real Letta server's
-  **0.93**, the gap entirely on stale-fact supersession (1.00 vs 0.67): on the webapp
-  persona's `authsvc -> identity-gateway` rename, semantic passage retrieval returns
-  *both* the stale and current note, exactly the accumulation failure CENTRI's typed
-  graph avoids. Both graders (deterministic + LLM judge) agree on the genuine engine.
-  `core/src/centri/bench/backends.py` labels which mode ran
-  (`letta-adapter[letta_http]` vs `letta-adapter[local_projection]`) so the comparison
-  is never silently faked; with no server configured the adapter degrades to a
-  `local_projection` (lexical recall, same no-supersession contract) and says so.
-  Re-run the live head-to-head with `scripts/live_letta_bench.sh` (set
-  `CENTRI_LETTA_URL`). HTTP-mode wiring is also unit-tested with a mocked client
-  (`tests/test_letta_http_store.py`, no network/SDK).
-- **Known metric limitation:** the Letta adapter scores 1.00 on *brief completeness*
-  because dumping all archival prose trivially includes every required substring; the
-  completeness metric does not penalize the accompanying noise. The supersession
-  failure is caught by the stale-fact metric (where Letta loses), but a precision/noise
-  metric would widen the native lead further. Kept faithful to the spec's three
-  headline metrics rather than adding one post-hoc.
-
 ## Configuration
 
-All configuration is environment-driven (see `.env.example`). No secrets are
-committed; `.env` and `*.db` are gitignored.
+All configuration is environment-driven — copy [`.env.example`](.env.example) to `.env`
+and fill in your keys. Nothing is committed; `.env` and `*.db` are gitignored.
 
-### Embeddings (semantic recall)
+CENTRI is BYOK (bring your own keys) and model-agnostic:
 
-Embeddings are **off by default** — the `NullEmbeddingProvider` writes no vectors
-and the suite runs fully offline. Recall stays purely lexical until you turn the
-semantic leg on, which is a deliberate, documented one-line change.
-
-Two provider options, both OpenAI-compatible and provider-agnostic:
-
-- **Local (preferred, no network):** set `CENTRI_EMBEDDING_LOCAL_MODEL`
-  (e.g. `BAAI/bge-small-en-v1.5`) — requires the optional `fastembed` package.
-- **Network route (LiteLLM):** enable the route and pin a model, pointing the
-  LiteLLM transport at any `/v1/embeddings` endpoint. With Nebius Token Factory:
+- **Model gateway** — `LITELLM_BASE_URL` / `LITELLM_API_KEY` point at any
+  OpenAI-compatible provider (e.g. Pioneer or Nebius Token Factory). Role models are set
+  per task (`MODEL_INTENT`, `MODEL_REASONING`, …).
+- **Auth** — `CENTRI_AUTH_TOKEN` gates every REST route except `/health` (and the
+  `/events/stream` WebSocket via `?token=`). Empty means auth off; set it before
+  exposing a port.
+- **Tools** — `CENTRI_COMPOSIO_API_KEY` enables Composio; `CENTRI_COMPOSIO_TOOLS` is a
+  comma-separated allowlist of tool slugs (default `TAVILY_SEARCH`). With no key the
+  provider reports unavailable-with-reason and never touches the network.
+- **Embeddings (optional)** — off by default (lexical recall only). Turn on semantic
+  recall with `CENTRI_EMBEDDING_*`; for the network route via Nebius Token Factory:
 
   ```bash
   CENTRI_EMBEDDING_ENABLED=true
@@ -292,28 +114,63 @@ Two provider options, both OpenAI-compatible and provider-agnostic:
   LITELLM_API_KEY=your-nebius-token-factory-key
   ```
 
-  A bare id (e.g. `Qwen/Qwen3-Embedding-8B`) is auto-prefixed with `openai/`
-  when a custom `LITELLM_BASE_URL` is set, so litellm routes via its
-  openai-compatible path instead of misreading `Qwen/` as a provider.
+- **Ingest paths** — `CENTRI_INGEST_OPENCODE_PATHS`, `CENTRI_INGEST_CLAUDE_CODE_PATHS`,
+  and `CENTRI_INGEST_CURSOR_PATHS` override the per-platform probe for histories in
+  unusual locations; `CENTRI_INGEST_DISABLED_AGENTS` opts an agent out entirely.
 
-Vectors are computed **at write time** (in consolidation); read-time ranking is
-pure cosine arithmetic, so the `curate()` purity / golden contract is preserved.
-A vector only *moves* a score when its weight is positive — set
-`CENTRI_CURATION_W_EMBEDDING_SIMILARITY` (e.g. `0.3`) to enable semantic recall,
-which bumps the policy version to `3c.1-embed` (its own golden). Leaving it at
-`0.0` keeps the pre-embedding briefs byte-identical.
+## Memory import
 
-After enabling on an existing install, backfill vectors for nodes written before
-embeddings were on:
+A fresh install imports your existing coding-agent histories so memory is complete from
+day one. Discover what's available, then bootstrap once (idempotent — re-running imports
+nothing new):
 
 ```bash
-centri memory rebuild --embed        # re-derive the graph from the event spine
-# or, in-process and idempotent:
-curl -XPOST localhost:8760/memory/embeddings/backfill
+curl localhost:8760/ingest/discover            # "found N OpenCode messages, M Cursor sessions"
+curl -X POST localhost:8760/ingest/bootstrap \
+  -H 'content-type: application/json' -d '{}'   # one-time full import
 ```
 
-When no provider is configured these degrade honestly — the rebuild still
-succeeds, it just writes no vectors and reports `embedding:unavailable`.
+After bootstrap, the ambient tail keeps pulling new history each scheduler tick.
+
+## Benchmark
+
+`centri-bench` is a falsifiable head-to-head: each engine assembles a per-turn brief
+from the same persona ground truth, scored on brief completeness, re-proposal rate,
+next-step correctness, and stale-fact handling. Native CENTRI is run against a **real
+Letta server** (v0.16.8, pgvector archival) — both a deterministic rubric and an
+LLM judge agree on the result.
+
+| Metric (avg over 3 personas) | native | Letta |
+|------------------------------|:------:|:-----:|
+| brief completeness ↑         | 1.00   | 1.00  |
+| re-proposal rate ↓           | 0.00   | 0.00  |
+| next-step correct ↑          | 1.00   | 1.00  |
+| stale-fact correct ↑         | 1.00   | 0.67  |
+| **composite ↑**              | **1.00** | **0.93** |
+
+The whole gap is stale-fact supersession: on a rename, Letta's semantic retrieval
+returns both the stale and the current note, while CENTRI's typed graph supersedes the
+old one. Letta is a **benchmark comparison only, not a runtime dependency** — CENTRI
+runs without it. Run it yourself:
+
+```bash
+cd core
+python -m centri.bench.run            # human-readable report
+python -m centri.bench.run --json     # machine-readable scores
+```
+
+See [`docs/centri-bench.md`](docs/centri-bench.md) for the full methodology.
+
+## Status
+
+The core, memory graph, coding hands, and tool contract are verified by a 365-test
+suite (`cd core && python -m pytest tests/`), covering the event spine with
+redaction, the real ACP coding loop against the `opencode` binary with error-path and
+failover drills, the typed memory graph with supersession, deterministic curation
+parity between chat and coding turns, bearer auth, and the Composio tool path. The
+React web shell builds, typechecks, and runs in a browser. The Tauri desktop wrapper is
+scaffolded but needs a local Rust toolchain to build. Voice is next on the roadmap — see
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## License
 
