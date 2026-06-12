@@ -95,6 +95,22 @@ class Settings:
     enabled_hands: List[str] = field(default_factory=lambda: ["acp", "opencode"])
     hand_priority: List[str] = field(default_factory=lambda: ["acp", "opencode"])
 
+    # Deterministic context curation (3c.0). The brief = curate(graph, cue,
+    # budget, policy_version) read path is pure — these are policy knobs only,
+    # never wall-clock/randomness. Budget is in approximate tokens (words).
+    # curation_cue_expansion names an optional LLM cue-expansion model role;
+    # empty (default) = honest-unavailable, deterministic builder runs.
+    curation_budget_total: int = 900
+    curation_budget_ambient: int = 280
+    curation_floor_decisions: int = 120
+    curation_floor_rejections: int = 60
+    curation_w_overlap: float = 1.0
+    curation_w_type_prior: float = 0.6
+    curation_w_open_loop: float = 0.5
+    curation_w_thread_affinity: float = 0.4
+    curation_w_recency: float = 0.05
+    curation_cue_expansion: str = ""
+
     # Autonomy
     autonomy_level: str = "autonomous_local"
     auto_commit: bool = True
@@ -155,6 +171,16 @@ class Settings:
             ingest_disabled_agents=os.getenv("CENTRI_INGEST_DISABLED_AGENTS", ""),
             acp_command=os.getenv("CENTRI_ACP_COMMAND", "opencode acp"),
             acp_opencode_command=os.getenv("CENTRI_ACP_OPENCODE_COMMAND", "opencode acp"),
+            curation_budget_total=int(os.getenv("CENTRI_CURATION_BUDGET_TOTAL", "900")),
+            curation_budget_ambient=int(os.getenv("CENTRI_CURATION_BUDGET_AMBIENT", "280")),
+            curation_floor_decisions=int(os.getenv("CENTRI_CURATION_FLOOR_DECISIONS", "120")),
+            curation_floor_rejections=int(os.getenv("CENTRI_CURATION_FLOOR_REJECTIONS", "60")),
+            curation_w_overlap=float(os.getenv("CENTRI_CURATION_W_OVERLAP", "1.0")),
+            curation_w_type_prior=float(os.getenv("CENTRI_CURATION_W_TYPE_PRIOR", "0.6")),
+            curation_w_open_loop=float(os.getenv("CENTRI_CURATION_W_OPEN_LOOP", "0.5")),
+            curation_w_thread_affinity=float(os.getenv("CENTRI_CURATION_W_THREAD_AFFINITY", "0.4")),
+            curation_w_recency=float(os.getenv("CENTRI_CURATION_W_RECENCY", "0.05")),
+            curation_cue_expansion=os.getenv("CENTRI_CURATION_CUE_EXPANSION", ""),
             enabled_hands=enabled_hands,
             hand_priority=hand_priority,
             autonomy_level=os.getenv("CENTRI_AUTONOMY_LEVEL", "autonomous_local"),

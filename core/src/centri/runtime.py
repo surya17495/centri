@@ -63,6 +63,7 @@ class Runtime:
         from centri.consolidation import Consolidator
         from centri.ingest import IngestConfig, IngestRegistry
         from centri.memory_brief import MemoryBriefAssembler, ProactiveBriefBuilder
+        from centri.curation import Curator
         from centri.models_catalog import ModelsCatalog
         from centri.opencode_config import OpenCodeConfig
 
@@ -115,6 +116,10 @@ class Runtime:
         self.models_catalog = ModelsCatalog()
         self.memory_brief = MemoryBriefAssembler(self.memory_graph)
         self.proactive_brief = ProactiveBriefBuilder(self.db, self.memory_graph)
+        # 3c.0 deterministic context curation — the live brief path. Model
+        # router is attached after it is constructed (below) for the
+        # honest-unavailable cue-expansion seam.
+        self.curator = Curator(self.memory_graph, settings=settings)
 
         # 7. Hands
         self.hands = Hands(settings, self.db)
@@ -162,6 +167,7 @@ class Runtime:
             hot_cache=self.hot_cache,
             briefing_builder=self.briefing_builder,
             memory_brief=self.memory_brief,
+            curator=self.curator,
         )
 
         # 15. Wire event bus -> hot cache

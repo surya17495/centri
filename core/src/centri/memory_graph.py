@@ -42,6 +42,13 @@ KIND_DECISION = "decision"
 KIND_FACT = "fact"
 KIND_OPEN_LOOP = "open_loop"
 
+# Reserved internal fact topics. These are derived infrastructure (e.g. the
+# 3c.0 ambient standing-context digest) stored in the graph for re-derivability,
+# but excluded from the general ``current_facts`` view so they never surface as
+# ordinary conventions/facts. The bench, briefing, and cued curation all read the
+# general view, so none of them should see these.
+RESERVED_FACT_TOPICS = ("ambient-standing-context",)
+
 # Decision stances.
 STANCE_ADOPTED = "adopted"
 STANCE_REJECTED = "rejected"
@@ -273,13 +280,19 @@ class MemoryGraph:
         cur = await self._db._execute(sql, tuple(params))
         return [self._row_to_decision(r) for r in cur.fetchall()]
 
-    async def current_facts(self, repo_id: Optional[str] = None) -> List[Fact]:
+    async def current_facts(
+        self, repo_id: Optional[str] = None, include_reserved: bool = False
+    ) -> List[Fact]:
         await self.ensure_tables()
         sql = "SELECT * FROM mem_facts WHERE superseded_by IS NULL"
         params: List[Any] = []
         if repo_id:
             sql += " AND (repo_id = ? OR repo_id IS NULL)"
             params.append(repo_id)
+        if not include_reserved and RESERVED_FACT_TOPICS:
+            placeholders = ",".join("?" for _ in RESERVED_FACT_TOPICS)
+            sql += f" AND topic NOT IN ({placeholders})"
+            params.extend(RESERVED_FACT_TOPICS)
         sql += " ORDER BY created_at DESC"
         cur = await self._db._execute(sql, tuple(params))
         return [self._row_to_fact(r) for r in cur.fetchall()]

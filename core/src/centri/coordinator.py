@@ -47,6 +47,7 @@ class Coordinator:
         hot_cache: Optional[Any] = None,
         briefing_builder: Optional[Any] = None,
         memory_brief: Optional[Any] = None,
+        curator: Optional[Any] = None,
     ):
         self._db = db
         self._mr = model_router
@@ -62,6 +63,12 @@ class Coordinator:
         self._briefing = briefing_builder
         # Phase 2 cue-driven memory injection (MemoryBriefAssembler).
         self._memory_brief = memory_brief
+        # 3c.0 deterministic context curation. When present this is the live
+        # brief path (pure curate(); ambient + cued layers, receipts, miss/waste
+        # instrumentation); MemoryBriefAssembler stays the fallback for callers
+        # without a curator (e.g. the bench harness).
+        self._curator = curator
+        self._last_curated_brief = None
 
     async def _publish(self, event: Dict[str, Any]) -> None:
         if self._event_bus is not None:
@@ -531,7 +538,18 @@ class Coordinator:
         """
         # Phase 2 cue-driven injection from the typed memory graph.
         repo_id = packet.repo_state.id if packet.repo_state else None
-        if self._memory_brief is not None:
+
+        # 3c.0: deterministic context curation is the live brief path when a
+        # curator is wired. It assembles the ambient standing layer + cued
+        # ranked retrieval via the pure curate(), stamps the result with
+        # policy_version + graph high-water, logs cue-expansion provenance, and
+        # emits curation.miss/curation.waste instrumentation. MemoryBriefAssembler
+        # remains the fallback for callers without a curator (e.g. the bench).
+        if self._curator is not None:
+            injected = await self._curate_into_packet(packet, text, repo_id)
+            if injected:
+                return self._finish_brief(packet, text)
+        elif self._memory_brief is not None:
             try:
                 section = await self._memory_brief.assemble(text, repo_id=repo_id)
                 # Stash the structured section so callers (and the bench) can
@@ -543,6 +561,90 @@ class Coordinator:
             except Exception:
                 logger.debug("Cue-driven memory injection failed", exc_info=True)
 
+        return await self._finish_brief(packet, text)
+
+    async def _curate_into_packet(
+        self, packet: ContextPacket, text: str, repo_id: Optional[str]
+    ) -> bool:
+        """Run the deterministic curator and inject its brief into ``packet``.
+
+        Returns True if anything was injected. Stamps the delegation with the
+        ``policy_version`` + ``graph_high_water`` receipt, logs cue-expansion
+        provenance, and emits ``curation.miss``/``curation.waste`` instrumentation
+        (deterministically, against the assembled brief). Never raises into the
+        hand path — a curation failure degrades to the fallback layers.
+        """
+        from centri import curation as _cur
+
+        try:
+            thread_id = (packet.active_thread or {}).get("id") if packet.active_thread else None
+            recent_turns = self._recent_user_turns(packet)
+            active_files = list(getattr(packet.repo_state, "changed_files", None) or []) if packet.repo_state else []
+            active_task = (packet.current_task or {}).get("id") if packet.current_task else None
+
+            brief, candidates, cue = await self._curator.assemble(
+                text,
+                repo_id=repo_id,
+                thread_id=thread_id,
+                recent_turns=recent_turns,
+                active_files=active_files,
+                active_task=active_task,
+            )
+            self._last_curated_brief = brief
+
+            # Cue-expansion provenance on the spine (honest-unavailable seam).
+            await self._record_event(
+                "curation.cue",
+                source="curation",
+                thread_id=thread_id,
+                repo_id=repo_id,
+                payload={
+                    "policy_version": brief.policy_version,
+                    "graph_high_water": brief.graph_high_water,
+                    **self._curator.expander.expansion_log(cue),
+                },
+            )
+
+            # Miss/waste instrumentation (E). The "turn text" available at brief
+            # time is the cue itself; the 3c.1 replay harness re-scores against the
+            # full resulting transcript. Emitting now establishes the event shape.
+            misses, wastes = _cur.compute_miss_waste(brief, candidates, text)
+            await self._record_event(
+                "curation.brief",
+                source="curation",
+                thread_id=thread_id,
+                repo_id=repo_id,
+                payload={
+                    **_cur.curation_breakdown_payload(brief),
+                    "miss_count": len(misses),
+                    "waste_count": len(wastes),
+                    "misses": misses,
+                    "wastes": wastes,
+                },
+            )
+
+            rendered = brief.render()
+            if rendered:
+                existing = list(packet.relevant_recall or [])
+                packet.relevant_recall = existing + [rendered]
+                return True
+            return False
+        except Exception:
+            logger.debug("Deterministic curation failed", exc_info=True)
+            return False
+
+    def _recent_user_turns(self, packet: ContextPacket) -> List[str]:
+        """Last few user utterances from recent events (for anaphora resolution)."""
+        turns: List[str] = []
+        for ev in packet.recent_events or []:
+            if (ev.get("type") or "") == "user.utterance":
+                txt = ev.get("text") or (ev.get("payload") or {}).get("text") or ""
+                if txt:
+                    turns.append(txt)
+        return turns[-3:]
+
+    async def _finish_brief(self, packet: ContextPacket, text: str) -> str:
+        """Phase 1 enrichment layers + final render, shared by both brief paths."""
         try:
             recent = await self._db.list_tasks()
             summaries: List[str] = []

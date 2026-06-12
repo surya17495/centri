@@ -26,6 +26,7 @@ the structured path is the production path because capture happens up front.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -93,7 +94,55 @@ class Consolidator:
 
         if synthesized:
             await self._emit_synthesized(synthesized)
+            # 3c.0: the ambient standing layer is refreshed by consolidation —
+            # a small slow-changing digest stored back in the graph (with a
+            # receipt) and prepended to every curated brief. Recompute it from
+            # the live graph whenever anything changed.
+            await self._refresh_ambient()
         return written
+
+    async def _refresh_ambient(self) -> None:
+        """Recompute the ambient standing-context digest from the live graph.
+
+        Deterministic and re-derivable: stored as a Fact (topic
+        ``ambient-standing-context``, tag ``ambient``, JSON statement) so it
+        supersedes the prior digest like any other node and rebuilds from the
+        ledger. No LLM (Decision 3) — a future digest summarizer is an optional
+        seam, not the production path.
+        """
+        from centri.curation import AMBIENT_TAG, AMBIENT_TOPIC
+
+        try:
+            decisions = await self._graph.current_decisions()
+            facts = await self._graph.current_facts()
+            loops = await self._graph.open_loops()
+
+            conventions = [f"{f.topic}: {f.statement}" for f in facts if "convention" in f.tags][:5]
+            adopted = [d for d in decisions if d.stance == STANCE_ADOPTED]
+            active_projects = sorted({d.repo_id for d in adopted if d.repo_id})[:5]
+            top_loops = [loop.intent[:80] for loop in loops][:5]
+            narrative = (
+                f"Recent memory: {len(adopted)} decisions, {len(facts)} facts, "
+                f"{len(loops)} open loops on record."
+            )
+
+            digest = {
+                "identity": conventions,
+                "active_projects": [str(p) for p in active_projects],
+                "open_loops": top_loops,
+                "narrative": narrative,
+            }
+            ambient = Fact(
+                id="ambient-standing-context",
+                topic=AMBIENT_TOPIC,
+                statement=json.dumps(digest, sort_keys=True),
+                source_event_id=None,
+                repo_id=None,
+                tags=[AMBIENT_TAG],
+            )
+            await self._graph.supersede_fact(ambient)
+        except Exception:
+            logger.debug("Ambient digest refresh failed", exc_info=True)
 
     async def rebuild_from_events(self) -> int:
         """Discard the graph and re-derive it from the full ledger.
