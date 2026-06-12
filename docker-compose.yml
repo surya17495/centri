@@ -1,0 +1,38 @@
+# CENTRI — minimal self-host stack for an Oracle Cloud Always Free VM
+# (Ampere A1, arm64) or any amd64 box. `docker compose up -d`.
+#
+# Secrets are read from .env at runtime (BYOK) and are NEVER baked into images.
+# Copy .env.example -> .env and fill in your keys first.
+services:
+  server:
+    build:
+      context: ./core
+      dockerfile: Dockerfile
+    image: centri-server:local
+    env_file: .env
+    environment:
+      # The container binds to all interfaces inside its own network namespace;
+      # host exposure is controlled by the port mapping + VM firewall.
+      CENTRI_CORE_HOST: "0.0.0.0"
+      CENTRI_CORE_PORT: "8760"
+      # Persistent memory spine / state DB lives on the mounted volume.
+      CENTRI_DB_PATH: "/data/state.db"
+    volumes:
+      - centri-data:/data
+    ports:
+      - "8760:8760"
+    restart: unless-stopped
+
+  shell:
+    build:
+      context: ./shell
+      dockerfile: Dockerfile
+    image: centri-shell:local
+    ports:
+      - "8761:80"
+    restart: unless-stopped
+    depends_on:
+      - server
+
+volumes:
+  centri-data:

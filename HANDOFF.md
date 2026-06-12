@@ -579,6 +579,30 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
   human with machine superpowers (memory bandwidth, VM tool use, voice). Docs
   updated (ROADMAP/VISION/HANDOFF Decisions + scope test). The "feels human"
   conversation items are no longer "premature Jarvis."
+- **Docker self-host slice DONE (2026-06-12):** minimal container boot for the
+  Oracle Cloud Always Free VM (Ampere A1, arm64). `core/Dockerfile`
+  (plain `python:3.11-slim`, multi-arch arm64+amd64, `pip install .` → `centri`
+  uvicorn entry, binds `0.0.0.0:8760`, `/data/state.db`, curl `/health`
+  HEALTHCHECK), `shell/Dockerfile` (node build → nginx static SPA, backend URL is
+  a runtime Settings value so nothing is baked in), `docker-compose.yml` at root
+  (`server` :8760 + named `centri-data` volume for the memory spine, `shell`
+  :8761, `restart: unless-stopped`, `env_file: .env`), `.dockerignore` per image
+  (keeps `.env`/`*.db`/tests out), `.env.example` extended with a Docker/BYOK note
+  + `CENTRI_AUTH_TOKEN`, and `docs/DEPLOY.md` (Oracle-VM quickstart: install
+  docker → clone → cp .env.example .env → fill keys → `docker compose up -d` →
+  open firewall 8760/8761 → curl `/health`). **Verification (honest):**
+  compose/Dockerfiles written, **sandbox-verified config only** (`docker
+  compose config`-equivalent YAML parse + build-context presence checks pass;
+  docker is NOT installed in this sandbox so NO image build or container boot was
+  run) — **boot verification pending on the user's VM.** pytest gate unchanged
+  (299 passed / 1 skipped); no core Python or shell app code touched.
+  **Next: boot on VM** checklist for the owner:
+  1. `sudo apt-get install -y docker.io docker-compose-v2 && sudo systemctl enable --now docker`
+  2. `git clone … && cd centri && cp .env.example .env` then fill `LITELLM_*`/provider keys + `CENTRI_AUTH_TOKEN`
+  3. `docker compose up -d && docker compose ps`
+  4. open Oracle Security List + host iptables for TCP 8760 & 8761 (see docs/DEPLOY.md)
+  5. `curl -fsS http://127.0.0.1:8760/health` → `{"status":"ok"}`, then open `http://<VM_IP>:8761`, set Backend URL + Auth token in Settings
+  6. if the build is slow on the A1, it's the shell `npm ci`/`vite build` stage — server image is small
 - **Next:** Opinions-with-confidence (Unit 3) — a typed agent-stance memory class
   (confidence + receipts, supersession, own type prior, rendered as stances in
   briefs, deterministic consolidation only). Then Phase 2 (feels human / was 3d) —
