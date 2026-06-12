@@ -11,7 +11,23 @@ Owner: surya. Repo: https://github.com/surya17495/centri.
 
 ## North star (ratified)
 
-**"OpenCode with photographic memory" is the wedge; the trajectory is Jarvis.**
+**CENTRI is a reasoning partner — it thinks like a human, with machine
+superpowers (photographic memory bandwidth, tool use inside a VM, voice).**
+*(North star v2, ratified 2026-06-11 PT — Decision 14.)*
+
+The owner's words: *"I want conversational seamlessness, not just for coding but
+as a reasoning partner that can think like a human with the infinite capability
+of a machine (memory bandwidth, tool use inside a VM, voice)."*
+
+**"OpenCode with photographic memory" is the first hand and the distribution
+wedge; the destination is a reasoning partner.** Coding is how the partner earns
+a place in the workflow, but **conversational seamlessness is first-class now** —
+it is no longer deferred behind the coding wedge. The "feels human in
+conversation" capabilities (waking-up situating, spontaneous association, prose
+ambient narrative, dormancy nudges) are the partner becoming itself, not premature
+Jarvis. The machine superpowers that distinguish the partner from a human
+collaborator are: photographic **memory bandwidth** (below), **tool use inside a
+VM** (Phase 4 automations), and **voice** (Phase 5).
 
 - **Photographic memory.** The agent remembers everything we did — decisions,
   rejections, conventions, open loops, the narrative of the work — and pulls the
@@ -44,9 +60,13 @@ Owner: surya. Repo: https://github.com/surya17495/centri.
 
 ### The scope test
 
-For every proposed feature ask: **does this make us a better
-OpenCode-with-memory, or is it premature Jarvis?** If it is the latter, it waits.
-This single test arbitrates roadmap disputes.
+For every proposed feature ask: **does this make memory+conversation more
+seamless, or the partner more capable — with receipts — or is it polish?** If it
+is polish, it waits; seamlessness and receipted capability ship. This single test
+arbitrates roadmap disputes. *(Revised under Decision 14, north star v2. The older
+form — "better OpenCode-with-memory, or premature Jarvis?" — is superseded:
+conversational seamlessness is now first-class, so it no longer fails the test as
+"premature Jarvis." The wedge is unchanged; coding is still the first hand.)*
 
 ---
 

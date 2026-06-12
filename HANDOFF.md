@@ -101,6 +101,19 @@ Decision (ratified 2026-06-12, owner):
     machine.* Structural reason curation quality must be identical in chat and
     coding (→ 3c.0.2).
 
+Decision (ratified 2026-06-11 PT, owner — north star v2):
+
+14. **North star v2 — "reasoning partner."** CENTRI thinks like a human with
+    machine superpowers (photographic memory bandwidth, tool use inside a VM,
+    voice). **Conversational seamlessness is first-class now**, no longer
+    deferred behind the coding wedge; coding stays the first hand + distribution
+    wedge, but "feels human in conversation" items (waking-up, spontaneous
+    association, prose narrative, nudges) are **no longer "premature Jarvis."**
+    Supersedes Decision 4's scope test. **New scope test:** *does this make
+    memory+conversation more seamless, or the partner more capable, with
+    receipts — or is it polish?* Decisions 1–13 stay intact (determinism,
+    receipts, photographic storage / human recall all still bind).
+
 **Phase A is DONE (2026-06-12):** master plan (`docs/VISION.md`), the four
 decisions above (`docs/ROADMAP.md` → "Decisions (Phase A)"), the tenancy-key
 migration (Unit 3, code + 6 tests), and the owner verification checklist
@@ -345,11 +358,17 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
   column on `mem_decisions`/`mem_facts`, `embedding_similarity` ranker feature =
   pure cosine). Embedding weight defaults to 0.0 so POLICY_VERSION stays `3c.0`
   and the golden brief is byte-identical. pytest 233/233.
+- **North star v2 (Decision 14, ratified 2026-06-11 PT):** CENTRI is a
+  **reasoning partner** — conversational seamlessness first-class, thinks like a
+  human with machine superpowers (memory bandwidth, VM tool use, voice). Docs
+  updated (ROADMAP/VISION/HANDOFF Decisions + scope test). The "feels human"
+  conversation items are no longer "premature Jarvis."
 - **Next:** Phase 2 (feels human / was 3d) — prose ambient narrative, waking-up
   briefing, spontaneous association, dormancy nudges — on the now-complete
-  Phase-1 machinery. Optional 3c.1 follow-ons: a network-backed embedding
-  provider behind `resolve_embedding_provider` (then bump POLICY_VERSION + new
-  golden when weight goes positive); Graphiti/Hindsight external baselines.
+  Phase-1 machinery. Voice (Phase 5) + VM tool use (Phase 4) are the following
+  rounds on the now-accelerated trajectory (need a real machine /
+  approval-gated tool contract). Optional Phase-1 follow-ons: Graphiti/Hindsight
+  external baselines.
 - **Layout:** `core/` Python FastAPI (src/centri/: app.py, db.py, coordinator,
   consolidation, memory_graph, memory_brief, curation, curation_replay, briefing, opencode_config,
   models_catalog, model_router, hands/, ingest/ [base + registry +

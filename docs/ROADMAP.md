@@ -115,6 +115,27 @@ ratified. They make the cheap-now / expensive-later moves immediately.
     (derived views, never lossy storage) and is the structural reason curation
     quality must be **identical in chat and coding** — see 3c.0.2.
 
+### Decision (ratified 2026-06-11 PT, owner — north star v2)
+
+14. **North star v2 — "reasoning partner."** CENTRI is a **reasoning partner**:
+    it thinks like a human, with machine superpowers — photographic memory
+    bandwidth, tool use inside a VM, and voice. The owner's words: *"I want
+    conversational seamlessness, not just for coding but as a reasoning partner
+    that can think like a human with the infinite capability of a machine (memory
+    bandwidth, tool use inside a VM, voice)."* **Conversational seamlessness is
+    first-class now**, no longer deferred behind the coding wedge. Coding remains
+    the **first hand** and the **distribution wedge** (it is how the partner earns
+    a place in the workflow), but "feels human in conversation" items —
+    waking-up situating, spontaneous association, prose ambient narrative,
+    dormancy nudges — are **no longer "premature Jarvis."** They are the partner
+    becoming itself. This **supersedes Decision 4's scope test** while keeping its
+    wedge intact. **The revised scope test:** *does this make memory+conversation
+    more seamless, or the partner more capable — with receipts — or is it polish?*
+    Polish waits; seamlessness and receipted capability ship. Decisions 1–13 stay
+    intact: determinism (3, 7, 12), receipts everywhere (7, 8, 13), and
+    photographic storage / human recall (13) all still bind — the reasoning
+    partner is built *on* them, not in tension with them.
+
 ## Phase 0 — Foundation (this phase)
 
 Port the HAL core into the `centri` package and establish the interfaces the rest
