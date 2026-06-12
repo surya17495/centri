@@ -18,6 +18,8 @@ representation of what a prose-archival agent can re-inject.
 
 from __future__ import annotations
 
+import logging
+import os
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -28,6 +30,8 @@ from centri.db import Database
 from centri.letta_memory_store import LettaMemoryStore
 from centri.memory_brief import MemoryBriefAssembler
 from centri.memory_graph import MemoryGraph
+
+logger = logging.getLogger(__name__)
 
 
 class _DBMixin:
@@ -58,10 +62,77 @@ class NativeBackend(_DBMixin):
         self._graph = MemoryGraph(self._db)
         await self._graph.ensure_tables()
         await self._seed_ledger(self._db, persona)
-        worker = Consolidator(self._db, self._graph)
+
+        # Default (offline) path: no embedding provider, deterministic tier only —
+        # keeps the goldens byte-identical and CI green. The live head-to-head
+        # opts in with CENTRI_BENCH_NATIVE_LIVE=1, which turns on write-time
+        # embeddings (from settings) and the LLM consolidation tier, exactly the
+        # production seams. The deterministic hint tier still runs in both modes.
+        embedding_provider = self._resolve_live_embeddings()
+        worker = Consolidator(self._db, self._graph, embedding_provider=embedding_provider)
         # Re-derive purely from the ledger — proves re-derivability and is the
         # production consolidation path.
         await worker.rebuild_from_events()
+        await self._maybe_run_llm_tier(embedding_provider)
+
+    def _resolve_live_embeddings(self):
+        """Write-time embedding provider for the live arm, Null otherwise.
+
+        Honest-unavailable by construction: returns whatever
+        ``resolve_embedding_provider`` decides from settings (Null unless
+        ``CENTRI_EMBEDDING_ENABLED`` + a model are set). Gated behind
+        ``CENTRI_BENCH_NATIVE_LIVE`` so the offline default is untouched.
+        """
+        if os.getenv("CENTRI_BENCH_NATIVE_LIVE", "") not in ("1", "true", "True"):
+            return None
+        try:
+            from centri.config import get_settings
+            from centri.curation import resolve_embedding_provider
+
+            return resolve_embedding_provider(get_settings())
+        except Exception:  # noqa: BLE001 — degrade to Null on any resolution failure
+            logger.warning("live embedding provider unavailable; using offline default", exc_info=True)
+            return None
+
+    async def _maybe_run_llm_tier(self, embedding_provider) -> None:
+        """Run the LLM consolidation tier over *unhinted* events, when live + configured.
+
+        For the shipped personas every event carries a deterministic hint, so the
+        unhinted backlog is empty and the tier is an honest no-op — it never
+        fabricates work. The tier is still wired so the live arm exercises the real
+        production seam (and any future unhinted persona event flows through it).
+        """
+        if os.getenv("CENTRI_BENCH_NATIVE_LIVE", "") not in ("1", "true", "True"):
+            return
+        assert self._db is not None and self._graph is not None
+        try:
+            from centri.consolidation import ConsolidationLLMTier, event_has_hints
+            from centri.config import get_settings
+            from centri.consolidation_llm import resolve_consolidation_client
+
+            client = resolve_consolidation_client(get_settings())
+            if client is None:
+                return
+            tier = ConsolidationLLMTier(
+                self._db, self._graph, client=client, embedding_provider=embedding_provider
+            )
+            import json
+
+            rows = await self._db.recent_events(limit=1_000_000)
+            events = []
+            for row in reversed(rows):  # oldest-first, matching production replay
+                raw = row.get("payload_json")
+                try:
+                    payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
+                except (TypeError, ValueError):
+                    payload = {}
+                events.append({"id": row.get("id"), "type": row.get("type"),
+                               "repo_id": row.get("repo_id"), "payload": payload})
+            backlog = [e for e in events if not event_has_hints(e["payload"])]
+            if backlog:
+                await tier.consume_unhinted(backlog, force=True)
+        except Exception:  # noqa: BLE001 — LLM tier must never break the bench
+            logger.warning("LLM consolidation tier skipped", exc_info=True)
 
     async def brief(self, cue: str, repo_id: Optional[str]) -> str:
         assert self._graph is not None
