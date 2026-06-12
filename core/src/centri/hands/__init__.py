@@ -73,25 +73,35 @@ class Hands:
                 )
         return caps
 
-    async def select(self, capability: str) -> Optional[Hand]:
-        """Pick the best hand for a capability: prefer a healthy one, in priority order."""
-        fallback: Optional[Hand] = None
+    async def _advertisers(self, capability: str) -> List[tuple[str, Hand]]:
+        """All hands advertising a capability, in priority order, healthy first.
+
+        Within priority order, a healthy hand sorts ahead of an unhealthy one, so
+        the preferred *reachable* hand is tried first and the rest remain as
+        ordered fallbacks for mid-task degradation.
+        """
+        healthy: List[tuple[str, Hand]] = []
+        unhealthy: List[tuple[str, Hand]] = []
         for name, hand in self._ordered_hands():
             try:
-                advertises = any(cap.name == capability for cap in await hand.capabilities())
-                if not advertises:
+                if not any(cap.name == capability for cap in await hand.capabilities()):
                     continue
-                if fallback is None:
-                    fallback = hand
-                health = await hand.health()
-                if health.healthy:
-                    logger.debug("Hand '%s' selected for '%s' (healthy)", name, capability)
-                    return hand
+                if (await hand.health()).healthy:
+                    healthy.append((name, hand))
+                else:
+                    unhealthy.append((name, hand))
             except Exception:
                 continue
-        if fallback is not None:
-            logger.debug("No healthy hand for '%s'; using first advertiser as fallback", capability)
-        return fallback
+        return healthy + unhealthy
+
+    async def select(self, capability: str) -> Optional[Hand]:
+        """Pick the best hand for a capability: prefer a healthy one, in priority order."""
+        ordered = await self._advertisers(capability)
+        return ordered[0][1] if ordered else None
+
+    # Hand statuses that are real successes; anything else triggers a degrade to
+    # the next advertiser (the fallback chain).
+    _SUCCESS_STATUSES = frozenset({"completed", "ok", "steered", "cancelled"})
 
     async def execute(
         self,
@@ -99,14 +109,49 @@ class Hands:
         event_sink: Optional[EventSink] = None,
         approval_gate: Optional[ApprovalGate] = None,
     ) -> HandoffResult:
-        hand = await self.select(request.to_capability)
-        if hand is None:
+        """Run a handoff, degrading down the priority chain on failure.
+
+        The preferred reachable hand (e.g. ACP) runs first. If it fails — whether
+        it returns a non-success status or raises (e.g. its process was killed
+        mid-task) — and a lower-priority advertiser exists (e.g. the OpenCode
+        subprocess), CENTRI degrades to it, emitting an honest ``hand.degraded``
+        event on the spine. When no fallback remains, the last honest failure is
+        returned as-is; CENTRI never fakes a success and never leaves the caller
+        without a real terminal status.
+        """
+        ordered = await self._advertisers(request.to_capability)
+        if not ordered:
             return HandoffResult(status="unavailable", summary=f"No hand configured for {request.to_capability}")
-        try:
-            return await hand.execute(request, event_sink=event_sink, approval_gate=approval_gate)
-        except Exception as exc:
-            logger.error("Hand execution failed: %s", exc, exc_info=True)
-            return HandoffResult(status="error", summary=str(exc))
+
+        last: HandoffResult = HandoffResult(status="unavailable", summary="no hand ran")
+        for idx, (name, hand) in enumerate(ordered):
+            try:
+                result = await hand.execute(request, event_sink=event_sink, approval_gate=approval_gate)
+            except Exception as exc:
+                logger.error("Hand '%s' execution raised: %s", name, exc, exc_info=True)
+                result = HandoffResult(status="error", summary=f"{name} hand error: {exc}")
+
+            if result.status in self._SUCCESS_STATUSES:
+                return result
+
+            last = result
+            next_name = ordered[idx + 1][0] if idx + 1 < len(ordered) else None
+            if next_name is not None and event_sink is not None:
+                # Honest event trail: the spine records the degrade, who failed,
+                # why, and who we are trying next — no silent swallow.
+                try:
+                    await event_sink({
+                        "type": "hand.degraded",
+                        "source": "hands",
+                        "summary": f"{name} hand {result.status}: degrading to {next_name}",
+                        "failed_hand": name,
+                        "failed_status": result.status,
+                        "reason": result.summary[:240],
+                        "fallback_hand": next_name,
+                    })
+                except Exception:
+                    logger.debug("hand.degraded event_sink error", exc_info=True)
+        return last
 
     async def cancel(self, capability: str, task_id: str) -> bool:
         hand = await self.select(capability)

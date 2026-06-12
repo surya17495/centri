@@ -372,6 +372,23 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
       `prompt_timeout` to `AcpHand` so a hung agent is bounded (was a hard-coded
       600 s). Every error path leaves the hand recoverable (connection popped from
       the registry) and emits honest events. pytest 260/260.
+- [x] **A3 Failover drill (e2e)** — DONE (2026-06-12). New `test_failover.py`
+      drives the full `Jobs` + `Hands` + `Database` stack: ACP healthy → task
+      delegated → ACP process dies mid-task → router degrades to the OpenCode
+      fallback → task ends `completed` with an honest `hand.degraded` event
+      (names `failed_hand=acp`, `failed_status`, `fallback_hand=opencode`) and
+      NO orphaned task left `running`. Second test: when the fallback is
+      honest-unavailable, the task fails honestly (no fake success), trail intact,
+      no orphan. **Behavior change (intentional):** `Hands.execute` previously did
+      selection-time failover only (pick the healthy hand up front, run it, return
+      its result even on mid-task failure). It now degrades down the priority chain
+      *at run time* — on a non-success status OR a raised exception it tries the
+      next advertiser, emitting `hand.degraded` per step; the last honest failure
+      is returned when the chain is exhausted (never a faked success). `select()`
+      is unchanged in meaning (returns the preferred reachable hand) but is now a
+      thin wrapper over `_advertisers()`. `Jobs._run_job` already guarantees a
+      terminal task state on every path, so "no orphaned running task" holds
+      structurally. pytest 262/262.
 - [ ] **3d.1 Waking-up + spontaneous association** — the "feels human"
       proactivity track on 3c.0's machinery: waking-up situating brief on first
       interaction of a session/day, spontaneous association surfacing an
@@ -538,6 +555,14 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
 - `Coordinator.build_delegation_brief` uses `Curator` (the live `curate()` path)
   when wired; `MemoryBriefAssembler` is the fallback the bench still uses — do
   not delete it.
+- `Hands.execute` degrades down the priority chain (`_advertisers`: healthy
+  first, then unhealthy, in `hand_priority` order). On a non-success status
+  (anything outside `completed/ok/steered/cancelled`) OR a raised exception it
+  tries the next advertiser and emits a `hand.degraded` event
+  (`failed_hand`/`failed_status`/`reason`/`fallback_hand`). It NEVER fakes a
+  success: when the chain is exhausted the last honest failure is returned.
+  `Jobs._run_job` always writes a terminal task state, so no task is left
+  `running` — keep both invariants (`test_failover.py` pins them).
 - 3c.0.2: chat turns (status/steering/general) curate through the SAME live
   `Curator` as coding delegation via `_curate_chat_context` → `_curate_into_packet`.
   Curation events carry `turn_kind` ("chat"|"delegation") — keep it on the
