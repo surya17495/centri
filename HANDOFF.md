@@ -408,14 +408,41 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
       *coroutine object* to the hand as `user_intent` instead of the rendered
       brief. Now awaited; pinned by
       `test_delegation_brief_returns_a_string_not_a_coroutine`. pytest 268/268.
+- [x] **B2 3e continuity bench scaffold** — DONE (2026-06-12). Added
+      `core/src/centri/bench/continuity.py` with the four 3e failure-mode suites
+      motivated by the owner's Hermes failures: (1) `cross_session_awareness`
+      (a prior-session open loop surfaces *unprompted* at a cold cue that does
+      not lexically name it), (2) `supersession_under_churn` (a fact renamed
+      thrice resolves to the LATEST value only; every stale value absent),
+      (3) `cold_start_recall` (fresh DB+graph, memory rebuilt purely via
+      `rebuild_from_events`, brief still carries decisions/conventions —
+      re-derivability, no warm cache), (4) `delegated_session_awareness` (typed
+      hints from a delegated hand's `task.completed` surface next brief). Each
+      suite scores a real pass/fail via the SAME production cold-start path
+      (`Consolidator.rebuild_from_events` → `MemoryBriefAssembler.assemble`),
+      reported honestly by `report_continuity`. Wired into
+      `python -m centri.bench.run --suite continuity` (+ `--json`). **Personas
+      are STUBS** — one `ContinuityPersona` (`_hermes_like`) shaped to exercise
+      all four modes, explicitly `# TODO(owner): replace with real Hermes
+      transcript material` before the numbers are quoted as 3e evidence. The
+      *methodology* is real and under test (`test_continuity.py`, 7 tests:
+      gate runs one score per (suite,persona), scores are real booleans with a
+      failure detail, deterministic, cold-start brief rebuilt purely from
+      events, plus two suite-validity guards). On the stub persona all four
+      suites PASS (1.00) — expected, since the placeholder ground truth sits
+      within CENTRI's known-good path; **failures are 3e FINDINGS, not bugs to
+      hide** (anti-gaming rule), and emerge once real Hermes material is seeded.
+      pytest 275/275.
 - [ ] **3d.1 Waking-up + spontaneous association** — the "feels human"
       proactivity track on 3c.0's machinery: waking-up situating brief on first
       interaction of a session/day, spontaneous association surfacing an
       unusually-high-scoring past item, and the open-loop scheduler (tick scans
       live open loops → `loop.nudge` per policy window → `/briefing`).
-- [ ] **3e Continuity bench** — extend `core/src/centri/bench/` with
-      unprompted-recall / supersession-churn / cold-start / delegated-work
-      scenarios; wire as regression gate.
+- [x] **3e Continuity bench (scaffold)** — DONE as **B2** above
+      (`bench/continuity.py` + `--suite continuity` + `test_continuity.py`).
+      The unprompted-recall / supersession-churn / cold-start / delegated-work
+      suites and the regression gate exist; personas remain
+      `# TODO(owner)` stubs awaiting real Hermes transcript material.
 
 ## State of the world (2026-06-12)
 
