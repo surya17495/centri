@@ -109,6 +109,10 @@ class Settings:
     curation_w_open_loop: float = 0.5
     curation_w_thread_affinity: float = 0.4
     curation_w_recency: float = 0.05
+    # 3c.1 stored-vector semantic similarity weight. Default 0.0 keeps the
+    # pre-embedding golden brief byte-identical; turning it on is a deliberate
+    # POLICY_VERSION bump paired with a configured embedding model.
+    curation_w_embedding_similarity: float = 0.0
     curation_cue_expansion: str = ""
 
     # Autonomy
@@ -180,6 +184,9 @@ class Settings:
             curation_w_open_loop=float(os.getenv("CENTRI_CURATION_W_OPEN_LOOP", "0.5")),
             curation_w_thread_affinity=float(os.getenv("CENTRI_CURATION_W_THREAD_AFFINITY", "0.4")),
             curation_w_recency=float(os.getenv("CENTRI_CURATION_W_RECENCY", "0.05")),
+            curation_w_embedding_similarity=float(
+                os.getenv("CENTRI_CURATION_W_EMBEDDING_SIMILARITY", "0.0")
+            ),
             curation_cue_expansion=os.getenv("CENTRI_CURATION_CUE_EXPANSION", ""),
             enabled_hands=enabled_hands,
             hand_priority=hand_priority,

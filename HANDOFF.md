@@ -276,13 +276,24 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
       ambient+cued, receipts, brief/cue events w/ turn_kind, determinism, live
       curator overrides stale warm cache, thread-affinity wired for chat, status
       turn curates). pytest 215/215.
-- [ ] **3c.1 Replay harness + quality-per-token bench + write-time embeddings** —
-      replay recorded spines + cues through `curate()`, score quality-per-token
-      against the `curation.miss`/`curation.waste` ledger; tiered daily→weekly
-      digests + entity pages maintained by supersession (digest summarizer behind
-      an optional LLM seam, deterministic fallback); write-time embeddings stored
-      on candidates so stored-vector similarity slots into the ranker as pure
-      arithmetic (the `Candidate.vector` slot is already shaped for it).
+- [x] **3c.1 Replay harness + quality-per-token bench + write-time embeddings** —
+      DONE (2026-06-12). New module `centri/curation_replay.py` (kept beside
+      `curation.py` so the golden-pinned read surface is untouched):
+      `ReplayHarness` re-scores the recorded `curation.brief` ledger (partitioned
+      chat vs delegation) and `quality_per_token()` is the headline metric
+      (precision/recall of needed facts per token); `DigestBuilder` emits tiered
+      daily→weekly digests as DERIVED VIEWS over the lossless spine (group live
+      nodes by `created_at` window, deterministic, receipt-bearing; `DigestSummarizer`
+      is the honest-unavailable LLM seam with a stable truncated-join fallback).
+      Write-time embeddings: `EmbeddingProvider`/`NullEmbeddingProvider` (stamp
+      `embedding:...`, honest-unavailable default), `vector` column added to
+      `mem_decisions`/`mem_facts` (additive ALTER, JSON array), populated onto
+      `Candidate.vector`, and an `embedding_similarity` ranker feature = pure
+      `cosine_similarity` at read. **POLICY_VERSION stays `3c.0`**: the feature
+      ships at weight **0.0** (config `curation_w_embedding_similarity`), so the
+      brief render is byte-identical and the golden is unchanged — turning
+      embeddings on is a deliberate future bump. Brief stamp gains
+      `embedding_stamp`. pytest 233/233.
 - [ ] **3d.1 Waking-up + spontaneous association** — the "feels human"
       proactivity track on 3c.0's machinery: waking-up situating brief on first
       interaction of a session/day, spontaneous association surfacing an
@@ -324,11 +335,23 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
   the same live `curate()` Curator path as coding delegation
   (`Coordinator._curate_chat_context`), with receipts + `curation.brief`/miss-waste
   events stamped `turn_kind="chat"`; `_handle_general` reasons over the curated
-  brief, not `memory.recall`. pytest 215/215.
-- **Next:** 3c.1 / Phase 1 (memory completion) — replay harness +
-  quality-per-token bench + write-time embeddings (per the work queue below).
+  brief, not `memory.recall`. pytest 215/215. **3c.1 DONE (2026-06-12):**
+  `centri/curation_replay.py` adds the replay harness (`ReplayHarness` re-scores
+  the recorded `curation.brief` ledger, chat/delegation partitioned),
+  quality-per-token bench (`quality_per_token` = F1-of-needed-facts / tokens),
+  tiered daily→weekly digests (`DigestBuilder`, derived views over the lossless
+  spine, receipt-bearing, deterministic; LLM summarizer seam honest-unavailable),
+  and write-time embeddings (`EmbeddingProvider` honest-unavailable, `vector`
+  column on `mem_decisions`/`mem_facts`, `embedding_similarity` ranker feature =
+  pure cosine). Embedding weight defaults to 0.0 so POLICY_VERSION stays `3c.0`
+  and the golden brief is byte-identical. pytest 233/233.
+- **Next:** Phase 2 (feels human / was 3d) — prose ambient narrative, waking-up
+  briefing, spontaneous association, dormancy nudges — on the now-complete
+  Phase-1 machinery. Optional 3c.1 follow-ons: a network-backed embedding
+  provider behind `resolve_embedding_provider` (then bump POLICY_VERSION + new
+  golden when weight goes positive); Graphiti/Hindsight external baselines.
 - **Layout:** `core/` Python FastAPI (src/centri/: app.py, db.py, coordinator,
-  consolidation, memory_graph, memory_brief, curation, briefing, opencode_config,
+  consolidation, memory_graph, memory_brief, curation, curation_replay, briefing, opencode_config,
   models_catalog, model_router, hands/, ingest/ [base + registry +
   opencode/claude_code/cursor/generic adapters], bench/);
   `shell/` React+TS+Tailwind (+ Tauri scaffold; components/OnboardingCard);
@@ -373,6 +396,18 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
   `curation_breakdown_payload`) and IS part of the policy identity: changing the
   tokenizer/encoding must bump the stamp (and re-pin any affected golden). The
   fallback path is never silent — its stamp says `wordcount:v1`.
+- 3c.1 write-time embeddings: the `embedding_similarity` ranker feature ships at
+  weight **0.0** (config `curation_w_embedding_similarity`) so POLICY_VERSION
+  stays `3c.0` and the golden brief is byte-identical — the feature is computed +
+  shown in the breakdown for explainability but cannot move a score. Turning it
+  on (positive weight + a real provider behind `resolve_embedding_provider`) is a
+  deliberate `POLICY_VERSION` bump + new golden. Embeddings are computed at WRITE
+  time only; read time is pure `cosine_similarity` over stored `Candidate.vector`
+  (no model call) so `curate()` purity holds. The provider `stamp`
+  (`embedding:unavailable` by default) rides on `CuratedBrief.embedding_stamp` and
+  in `curation_breakdown_payload`, like the tokenizer stamp. `mem_decisions`/
+  `mem_facts` carry a nullable `vector` (JSON array, additive ALTER); open loops
+  do not.
 - The ambient digest is a reserved Fact (`ambient-standing-context`, tag
   `ambient`) excluded from the general `current_facts` view via
   `RESERVED_FACT_TOPICS` — keep it out of the cued candidate set and out of any
@@ -397,5 +432,7 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
   cosmetic, leave it.
 - `core_token` in config.py is legacy/unused; auth uses `auth_token`.
 - 3c.0 `curation.miss`/`curation.waste` are emitted at brief time scored against
-  the *cue* as the stand-in "turn text" — full resulting-transcript scoring is
-  3c.1's replay harness. The event shape is final; the scoring input gets richer.
+  the *cue* as the stand-in "turn text". 3c.1's `ReplayHarness` re-scores the
+  recorded `curation.brief` ledger (it reads `lines`/`miss_count`/`waste_count`/
+  `turn_kind` off the payload), so keep those fields on the event — the harness
+  is a pure re-scoring of recorded turns, not a re-`curate()`.

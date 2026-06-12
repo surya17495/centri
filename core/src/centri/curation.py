@@ -83,6 +83,11 @@ class RankWeights:
     open_loop_boost: float = 0.5  # open loop whose cue the turn touches
     thread_affinity: float = 0.4  # thread-local above global background
     recency: float = 0.05         # TIEBREAK ONLY — deliberately tiny
+    # Stored-vector semantic similarity (3c.1). DEFAULT 0.0 so the pre-embedding
+    # golden brief is byte-identical until embeddings are deliberately turned on
+    # (a POLICY_VERSION bump). With weight 0.0 the feature is computed and shown
+    # in the breakdown for explainability but cannot move a score.
+    embedding_similarity: float = 0.0
 
     @classmethod
     def from_settings(cls, settings: Any) -> "RankWeights":
@@ -99,6 +104,7 @@ class RankWeights:
             open_loop_boost=_f("curation_w_open_loop", cls.open_loop_boost),
             thread_affinity=_f("curation_w_thread_affinity", cls.thread_affinity),
             recency=_f("curation_w_recency", cls.recency),
+            embedding_similarity=_f("curation_w_embedding_similarity", cls.embedding_similarity),
         )
 
 
@@ -213,6 +219,87 @@ def default_token_counter() -> TokenCounter:
 
 
 # ---------------------------------------------------------------------------
+# Write-time embeddings (3c.1) — pinned model, pure-arithmetic read, honest fallback
+# ---------------------------------------------------------------------------
+# Embeddings are computed when a candidate is WRITTEN (the model name is pinned
+# and recorded in the policy stamp, exactly like the tokenizer). At READ time the
+# ranker only does pure cosine arithmetic over stored vectors — no model call, no
+# network — so the curate() purity / golden-snapshot contract is preserved. When
+# no embedding model is configured the provider is honest-unavailable: it yields
+# no vectors and stamps ``embedding:unavailable``, the cosine feature is 0.0, and
+# (with weight 0.0 by default) briefs are byte-identical to the pre-embedding
+# policy. Turning embeddings on is therefore a deliberate POLICY_VERSION bump.
+
+
+class EmbeddingProvider:
+    """Deterministic write-time embedding behind a small interface.
+
+    ``stamp`` is the embedding-model identity recorded on the brief (e.g.
+    ``embedding:Qwen/Qwen3-Embedding-8B`` or ``embedding:unavailable``);
+    ``embed(text)`` returns a vector or ``None`` when unavailable. Read time
+    never calls this — vectors are stored on the candidate at write time.
+    """
+
+    stamp: str = "embedding:abstract"
+
+    @property
+    def available(self) -> bool:  # pragma: no cover - interface
+        return False
+
+    def embed(self, text: str) -> Optional[List[float]]:  # pragma: no cover - interface
+        raise NotImplementedError
+
+
+class NullEmbeddingProvider(EmbeddingProvider):
+    """Honest-unavailable embedding: no model, no vectors, visible stamp.
+
+    Used when no embedding model is configured (the default). Its presence is
+    recorded in the brief stamp so the degraded path is never silent, and it
+    yields ``None`` so the cosine feature contributes nothing.
+    """
+
+    stamp = "embedding:unavailable"
+
+    @property
+    def available(self) -> bool:
+        return False
+
+    def embed(self, text: str) -> Optional[List[float]]:
+        return None
+
+
+def resolve_embedding_provider(settings: Any = None) -> EmbeddingProvider:
+    """The configured embedding provider, honest-unavailable by default.
+
+    3c.1 ships the seam and the deterministic fallback; a real network-backed
+    provider slots in here behind ``settings.model_embeddings`` without changing
+    the read path. With no model configured (tests, offline) the null provider
+    runs, so the suite needs no network/keys.
+    """
+    return NullEmbeddingProvider()
+
+
+def cosine_similarity(a: Optional[Sequence[float]], b: Optional[Sequence[float]]) -> float:
+    """Pure cosine similarity in [0, 1], clamped. 0.0 when either side is absent.
+
+    Read-time arithmetic only — no model call. Negative cosines clamp to 0.0 so
+    the feature only ever *adds* evidence, never subtracts (keeping the linear
+    ranker's features non-negative like the others).
+    """
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    sim = dot / (na * nb)
+    if sim <= 0.0:
+        return 0.0
+    return round(min(1.0, sim), 6)
+
+
+# ---------------------------------------------------------------------------
 # A. Cue builder
 # ---------------------------------------------------------------------------
 @dataclass
@@ -235,6 +322,10 @@ class Cue:
     repo_id: Optional[str] = None
     active_files: List[str] = field(default_factory=list)
     active_task: Optional[str] = None
+    # 3c.1: the cue's own embedding, computed write-time-style at cue build when a
+    # provider is available. ``None`` (default) -> the cosine feature is 0.0, so
+    # the deterministic lexical path is unchanged when embeddings are off.
+    vector: Optional[List[float]] = None
 
     def term_set(self) -> set:
         return set(self.terms)
@@ -428,6 +519,7 @@ class Ranker:
             "open_loop_boost": self._w.open_loop_boost,
             "thread_affinity": self._w.thread_affinity,
             "recency": self._w.recency,
+            "embedding_similarity": self._w.embedding_similarity,
         }[name]
 
     def _features(self, cue: Cue, cue_terms: set, c: Candidate) -> Dict[str, float]:
@@ -444,12 +536,16 @@ class Ranker:
         else:
             thread_affinity = 0.0
         recency = _recency_score(c.created_at)
+        # Stored-vector semantic similarity — pure cosine, no model call. 0.0 when
+        # either vector is absent (the default / honest-unavailable path).
+        embedding_similarity = cosine_similarity(cue.vector, c.vector)
         return {
             "overlap": overlap,
             "type_prior": type_prior,
             "open_loop_boost": open_loop_boost,
             "thread_affinity": thread_affinity,
             "recency": recency,
+            "embedding_similarity": embedding_similarity,
         }
 
 
@@ -618,6 +714,7 @@ async def gather_candidates(
                 created_at=d.created_at,
                 repo_id=d.repo_id,
                 tags=list(d.tags),
+                vector=d.vector,
                 obj=d,
             )
         )
@@ -638,6 +735,7 @@ async def gather_candidates(
                 created_at=f.created_at,
                 repo_id=f.repo_id,
                 tags=list(f.tags),
+                vector=f.vector,
                 obj=f,
             )
         )
@@ -743,6 +841,10 @@ class CuratedBrief:
     # of the policy stamp: a tokenizer change changes this string, so a re-pinned
     # golden is deliberate, never silent drift.
     tokenizer_stamp: str = ""
+    # Embedding-model identity (e.g. ``embedding:Qwen/Qwen3-Embedding-8B`` or
+    # ``embedding:unavailable``). Also part of the policy stamp — the write-time
+    # embedding model is pinned exactly like the tokenizer.
+    embedding_stamp: str = "embedding:unavailable"
 
     def is_empty(self) -> bool:
         return self.ambient.is_empty() and not self.lines
@@ -818,17 +920,20 @@ async def curate(
     policy_version: str = POLICY_VERSION,
     repo_id: Optional[str] = None,
     counter: Optional[TokenCounter] = None,
+    embedding_provider: Optional[EmbeddingProvider] = None,
 ) -> CuratedBrief:
     """Pure, versioned curation: ``brief = curate(graph, cue, budget, version)``.
 
-    No wall-clock, no randomness, no LLM. Given the same graph snapshot, cue,
-    budget, policy_version and tokenizer, the rendered brief is byte-identical —
-    the contract the golden snapshot tests pin. The token counter's ``stamp`` is
-    recorded on the brief so the tokenizer is part of the policy identity.
+    No wall-clock, no randomness, no LLM at read time. Given the same graph
+    snapshot, cue, budget, policy_version, tokenizer and stored vectors, the
+    rendered brief is byte-identical — the contract the golden snapshot tests
+    pin. The token counter's ``stamp`` and the embedding provider's ``stamp`` are
+    recorded on the brief so both are part of the policy identity.
     """
     budget = budget or Budget()
     weights = weights or RankWeights()
     counter = counter or default_token_counter()
+    embedding_provider = embedding_provider or NullEmbeddingProvider()
     repo_id = repo_id if repo_id is not None else cue.repo_id
 
     ambient = await load_ambient(graph, repo_id=repo_id)
@@ -843,6 +948,7 @@ async def curate(
         lines=lines,
         cue=cue,
         tokenizer_stamp=counter.stamp,
+        embedding_stamp=embedding_provider.stamp,
     )
 
 
@@ -957,6 +1063,7 @@ def curation_breakdown_payload(brief: CuratedBrief) -> Dict[str, Any]:
     return {
         "policy_version": brief.policy_version,
         "tokenizer_stamp": brief.tokenizer_stamp,
+        "embedding_stamp": brief.embedding_stamp,
         "graph_high_water": brief.graph_high_water,
         "lines": brief.receipts(),
         "ambient_source_event_id": brief.ambient.source_event_id,
@@ -983,12 +1090,17 @@ class Curator:
         self._budget = Budget.from_settings(settings) if settings is not None else Budget()
         self._weights = RankWeights.from_settings(settings) if settings is not None else RankWeights()
         self._counter = default_token_counter()
+        self._embeddings = resolve_embedding_provider(settings)
         self._cue_builder = CueBuilder(graph)
         self._expander = CueExpander(settings, model_router)
 
     @property
     def expander(self) -> "CueExpander":
         return self._expander
+
+    @property
+    def embeddings(self) -> "EmbeddingProvider":
+        return self._embeddings
 
     async def assemble(
         self,
@@ -1009,6 +1121,10 @@ class Curator:
             active_task=active_task,
         )
         cue = await self._expander.expand(cue)
+        # Embed the cue write-time-style (no-op when honest-unavailable). The
+        # ranker then does pure cosine over stored candidate vectors at read.
+        if self._embeddings.available and cue.vector is None:
+            cue.vector = self._embeddings.embed(cue.raw)
         candidates = await gather_candidates(self._graph, cue, repo_id)
         brief = await curate(
             self._graph,
@@ -1017,5 +1133,6 @@ class Curator:
             weights=self._weights,
             repo_id=repo_id,
             counter=self._counter,
+            embedding_provider=self._embeddings,
         )
         return brief, candidates, cue

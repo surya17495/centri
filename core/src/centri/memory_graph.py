@@ -86,6 +86,10 @@ class Decision:
     superseded_by: Optional[str] = None
     invalidated_at: Optional[str] = None
     tags: List[str] = field(default_factory=list)
+    # 3c.1 write-time embedding. Computed when the node is written if an embedding
+    # provider is configured; ``None`` (default / honest-unavailable) leaves the
+    # read-time cosine feature at 0.0. Stored as a JSON float array.
+    vector: Optional[List[float]] = None
 
 
 @dataclass
@@ -102,6 +106,8 @@ class Fact:
     superseded_by: Optional[str] = None
     invalidated_at: Optional[str] = None
     tags: List[str] = field(default_factory=list)
+    # 3c.1 write-time embedding (see :class:`Decision`).
+    vector: Optional[List[float]] = None
 
 
 @dataclass
@@ -152,7 +158,8 @@ class MemoryGraph:
                 created_at TEXT NOT NULL,
                 superseded_by TEXT,
                 invalidated_at TEXT,
-                tags TEXT NOT NULL DEFAULT ''
+                tags TEXT NOT NULL DEFAULT '',
+                vector TEXT
             )"""
         )
         await self._db._execute(
@@ -166,7 +173,8 @@ class MemoryGraph:
                 created_at TEXT NOT NULL,
                 superseded_by TEXT,
                 invalidated_at TEXT,
-                tags TEXT NOT NULL DEFAULT ''
+                tags TEXT NOT NULL DEFAULT '',
+                vector TEXT
             )"""
         )
         await self._db._execute(
@@ -195,6 +203,14 @@ class MemoryGraph:
                 await self._db._execute(
                     f"ALTER TABLE {table} ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'local'"
                 )
+        # 3c.1: write-time embedding column on the semantic tables (additive, JSON
+        # float array, nullable). Open loops are prospective state, not retrieval
+        # candidates by vector, so they keep no vector column.
+        for table in ("mem_decisions", "mem_facts"):
+            cur = await self._db._execute(f"PRAGMA table_info({table})")
+            cols = {r["name"] for r in cur.fetchall()}
+            if "vector" not in cols:
+                await self._db._execute(f"ALTER TABLE {table} ADD COLUMN vector TEXT")
         self._ready = True
 
     # ------------------------------------------------------------------
@@ -205,12 +221,12 @@ class MemoryGraph:
         await self._db._execute(
             """INSERT OR REPLACE INTO mem_decisions
                (id, topic, statement, stance, rationale, source_event_id, repo_id,
-                tenant_id, created_at, superseded_by, invalidated_at, tags)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                tenant_id, created_at, superseded_by, invalidated_at, tags, vector)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 d.id, d.topic, d.statement, d.stance, d.rationale, d.source_event_id,
                 d.repo_id, d.tenant_id, d.created_at, d.superseded_by, d.invalidated_at,
-                ",".join(d.tags),
+                ",".join(d.tags), self._encode_vector(d.vector),
             ),
         )
 
@@ -219,11 +235,12 @@ class MemoryGraph:
         await self._db._execute(
             """INSERT OR REPLACE INTO mem_facts
                (id, topic, statement, source_event_id, repo_id, tenant_id, created_at,
-                superseded_by, invalidated_at, tags)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                superseded_by, invalidated_at, tags, vector)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 f.id, f.topic, f.statement, f.source_event_id, f.repo_id,
-                f.tenant_id, f.created_at, f.superseded_by, f.invalidated_at, ",".join(f.tags),
+                f.tenant_id, f.created_at, f.superseded_by, f.invalidated_at,
+                ",".join(f.tags), self._encode_vector(f.vector),
             ),
         )
 
@@ -441,6 +458,25 @@ class MemoryGraph:
         return [t for t in (raw or "").split(",") if t]
 
     @staticmethod
+    def _encode_vector(vec: Optional[List[float]]) -> Optional[str]:
+        return json.dumps(vec) if vec else None
+
+    @staticmethod
+    def _vector_of(r: Any) -> Optional[List[float]]:
+        # Tolerate rows from a DB whose vector migration hasn't applied yet.
+        try:
+            raw = r["vector"]
+        except (KeyError, IndexError):
+            return None
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        return [float(x) for x in data] if isinstance(data, list) else None
+
+    @staticmethod
     def _tenant_of(r: Any) -> str:
         # Tolerate rows from a DB whose migration hasn't been applied yet (e.g. a
         # read against a legacy table mid-upgrade): default to the single-tenant key.
@@ -455,7 +491,7 @@ class MemoryGraph:
             rationale=r["rationale"], source_event_id=r["source_event_id"],
             repo_id=r["repo_id"], tenant_id=self._tenant_of(r), created_at=r["created_at"],
             superseded_by=r["superseded_by"], invalidated_at=r["invalidated_at"],
-            tags=self._split_tags(r["tags"]),
+            tags=self._split_tags(r["tags"]), vector=self._vector_of(r),
         )
 
     def _row_to_fact(self, r: Any) -> Fact:
@@ -465,6 +501,7 @@ class MemoryGraph:
             tenant_id=self._tenant_of(r), created_at=r["created_at"],
             superseded_by=r["superseded_by"],
             invalidated_at=r["invalidated_at"], tags=self._split_tags(r["tags"]),
+            vector=self._vector_of(r),
         )
 
     def _row_to_loop(self, r: Any) -> OpenLoop:
