@@ -297,11 +297,25 @@ class ModelRouter:
     # ------------------------------------------------------------------
     # Embeddings with LRU caching
     # ------------------------------------------------------------------
-    def embed(self, texts: List[str]) -> Optional[List[List[float]]]:
+    def embed(self, texts: List[str], model: Optional[str] = None) -> Optional[List[List[float]]]:
         if litellm is None:
             logger.warning("litellm not installed; embed skipped")
             return None
         resolved = self._resolve_model("embeddings")
+        # An explicit model wins over the role default so a provider configured
+        # purely via CENTRI_EMBEDDING_MODEL (no MODEL_EMBEDDINGS role) still
+        # resolves: reuse the role's transport (proxy/key/base) but swap the model.
+        if model:
+            if resolved is None:
+                resolved = self._resolve_model("fast_reply")
+            if resolved is not None:
+                resolved = ResolvedModel(
+                    role="embeddings",
+                    model=self._normalize_direct_model(model) if not resolved.via_proxy else model,
+                    api_key=resolved.api_key,
+                    api_base=resolved.api_base,
+                    via_proxy=resolved.via_proxy,
+                )
         if resolved is None:
             logger.warning("Embedding model not configured")
             return None

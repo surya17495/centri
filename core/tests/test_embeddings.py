@@ -102,13 +102,21 @@ class TestProviders:
             model_embeddings = ""
 
         class FakeRouter:
-            def embed(self, texts):
+            def __init__(self):
+                self.seen_model = None
+
+            def embed(self, texts, model=None):
+                self.seen_model = model
                 return [[1.0, 0.0, 0.0] for _ in texts]
 
-        prov = resolve_embedding_provider(S(), FakeRouter())
+        router = FakeRouter()
+        prov = resolve_embedding_provider(S(), router)
         assert isinstance(prov, LiteLLMEmbeddingProvider)
         assert prov.available is True
         assert prov.embed("hi") == [1.0, 0.0, 0.0]
+        # The provider's configured model is threaded through to the router so a
+        # CENTRI_EMBEDDING_MODEL-only config still resolves a model.
+        assert router.seen_model == "text-embedding-3-small"
         assert prov.embed("") is None
 
 

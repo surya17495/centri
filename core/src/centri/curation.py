@@ -349,7 +349,7 @@ class LiteLLMEmbeddingProvider(EmbeddingProvider):
         if not (text or "").strip() or self._mr is None:
             return None
         try:
-            out = self._mr.embed([text])
+            out = self._mr.embed([text], model=self._model_name)
         except Exception:  # noqa: BLE001
             return None
         if not out or out[0] is None:
