@@ -235,6 +235,30 @@ class TestTemporal:
             # Every narrated line carries a receipt back to the spine.
             assert all(ln["receipt"] for ln in r["lines"])
 
+    async def test_resume_question_routes_to_temporal(self):
+        # "where did we leave off" must classify as a temporal turn (not coding),
+        # so chat returns the receipted resume narrative deterministically.
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            r = client.post(
+                "/utterance", json={"text": "where did we leave off?", "user_id": "t"}
+            ).json()
+            assert r["response_type"] == "temporal"
+            assert r["data"]["query"] == "where_left_off"
+
+    async def test_changed_since_question_routes_with_anchor(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            r = client.post(
+                "/utterance",
+                json={"text": "what changed since 2026-06-01?", "user_id": "t"},
+            ).json()
+            assert r["response_type"] == "temporal"
+            assert r["data"]["query"] == "changed_since"
+            assert r["data"]["anchor"] == "2026-06-01T00:00:00+00:00"
+
 
 class TestIngest:
     """Phase 3b.3: POST /ingest/opencode tails an external opencode.db once,

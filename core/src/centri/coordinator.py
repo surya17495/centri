@@ -29,6 +29,53 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# 3c.2 temporal-intent detection. Kept module-level + deterministic (pure string
+# matching) so it is trivially testable and adds no LLM cost on the hot path.
+_RESUME_PHRASES = (
+    "where did we leave off",
+    "where were we",
+    "where we left off",
+    "pick up where",
+    "catch me up",
+    "what were we doing",
+)
+_SINCE_PHRASES = (
+    "what changed since",
+    "what's changed since",
+    "what has changed since",
+    "what's new since",
+    "whats new since",
+    "what happened since",
+    "anything change since",
+    "changes since",
+)
+
+
+def _is_resume_query(lowered: str) -> bool:
+    return any(p in lowered for p in _RESUME_PHRASES)
+
+
+def _is_temporal_query(lowered: str) -> bool:
+    return _is_resume_query(lowered) or any(p in lowered for p in _SINCE_PHRASES)
+
+
+def _extract_since(lowered: str) -> str:
+    """Pull a temporal anchor out of a 'what changed since X' utterance.
+
+    Recognizes an explicit ISO date (``2026-06-10``), the phrase 'last session'
+    (→ the ``last-session`` idle-gap anchor), and otherwise returns empty (origin —
+    narrate everything). Pure string matching; the narrator does the resolution.
+    """
+    import re as _re
+
+    m = _re.search(r"\d{4}-\d{2}-\d{2}", lowered)
+    if m:
+        return m.group(0)
+    if "last session" in lowered or "previous session" in lowered:
+        return "last-session"
+    return ""
+
+
 class Coordinator:
     """Main brain."""
 
@@ -48,6 +95,7 @@ class Coordinator:
         briefing_builder: Optional[Any] = None,
         memory_brief: Optional[Any] = None,
         curator: Optional[Any] = None,
+        temporal_narrator: Optional[Any] = None,
     ):
         self._db = db
         self._mr = model_router
@@ -68,6 +116,10 @@ class Coordinator:
         # instrumentation); MemoryBriefAssembler stays the fallback for callers
         # without a curator (e.g. the bench harness).
         self._curator = curator
+        # 3c.2 temporal narrative — "what changed since X" / "where did we leave off".
+        # A pure derived view over the spine + bi-temporal graph; honest-unavailable
+        # (None) for callers without it wired.
+        self._temporal = temporal_narrator
         self._last_curated_brief = None
 
     async def _publish(self, event: Dict[str, Any]) -> None:
@@ -209,7 +261,9 @@ class Coordinator:
         if intent not in ("coding_task", "approval_response", "stop"):
             await self._curate_chat_context(packet, text, chat_thread)
 
-        if intent == "status":
+        if intent == "temporal":
+            resp = await self._handle_temporal(text, event_id)
+        elif intent == "status":
             resp = await self._handle_status(packet, event_id)
         elif intent == "steering":
             resp = await self._handle_steering(text, packet, event_id)
@@ -367,6 +421,11 @@ class Coordinator:
     # ------------------------------------------------------------------
     def _classify_intent(self, text: str, packet: ContextPacket) -> str:
         lowered = text.strip().lower()
+        # 3c.2 temporal narrative — checked before the coding/status heuristics so
+        # "what changed since X" / "where did we leave off" / "catch me up" are not
+        # mis-read as a coding task ("changed", "add" overlap the coding keywords).
+        if self._temporal is not None and _is_temporal_query(lowered):
+            return "temporal"
         if any(k in lowered for k in ["status", "what's going on", "what is happening", "what's happening"]):
             return "status"
         if any(k in lowered for k in ["tell it to", "steer", "send message to", "give it"]):
@@ -412,6 +471,49 @@ class Coordinator:
                 "running_tasks": len(running),
                 "pending_approvals": len(pending),
                 "blockers": blockers,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Temporal narrative (3c.2) — "what changed since X" / "where left off"
+    # ------------------------------------------------------------------
+    async def _handle_temporal(self, text: str, event_id: str) -> CoordinatorResponse:
+        """Answer a temporal-recall question from the derived narrative view.
+
+        Deterministic and receipt-bearing: it reads the typed graph through the
+        TemporalNarrator (no LLM at read time, no confabulation). "where did we
+        leave off" → resume view; otherwise "what changed since <anchor>" with the
+        anchor extracted from the utterance (bare date / 'last session' / origin).
+        """
+        lowered = text.strip().lower()
+        if _is_resume_query(lowered):
+            nar = await self._temporal.where_left_off()
+        else:
+            since = _extract_since(lowered)
+            resolved = await self._temporal.resolve_anchor(since)
+            nar = await self._temporal.changed_since(
+                resolved["anchor"], anchor_kind=resolved["kind"]
+            )
+        await self._db.append_event(
+            event_id=f"{event_id}-temporal",
+            type="coordinator.temporal",
+            source="coordinator",
+            ts=_now(),
+            payload={
+                "query": nar.query,
+                "anchor": nar.anchor,
+                "anchor_kind": nar.anchor_kind,
+                "line_count": len(nar.lines),
+            },
+        )
+        return CoordinatorResponse(
+            response_type="temporal",
+            message=nar.render(),
+            data={
+                "query": nar.query,
+                "anchor": nar.anchor,
+                "anchor_kind": nar.anchor_kind,
+                "lines": [ln.as_dict() for ln in nar.lines],
             },
         )
 

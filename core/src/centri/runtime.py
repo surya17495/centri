@@ -184,6 +184,7 @@ class Runtime:
             briefing_builder=self.briefing_builder,
             memory_brief=self.memory_brief,
             curator=self.curator,
+            temporal_narrator=self.temporal_narrator,
         )
 
         # 15. Wire event bus -> hot cache

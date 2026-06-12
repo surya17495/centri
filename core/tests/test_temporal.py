@@ -202,3 +202,29 @@ class TestAnchorResolution:
                               ts="2026-06-10T10:00:00+00:00", payload={})
         out = await TemporalNarrator(g, db).resolve_anchor("last-session")
         assert out["kind"] == "origin" and out["anchor"] == ""
+
+
+class TestIntentMatchers:
+    """Pure, deterministic temporal-intent detection used by the coordinator."""
+
+    def test_resume_phrases_match(self):
+        from centri.coordinator import _is_resume_query, _is_temporal_query
+        for p in ["where did we leave off", "catch me up", "where were we"]:
+            assert _is_resume_query(p)
+            assert _is_temporal_query(p)
+
+    def test_since_phrases_are_temporal_not_resume(self):
+        from centri.coordinator import _is_resume_query, _is_temporal_query
+        p = "what changed since 2026-06-01"
+        assert _is_temporal_query(p)
+        assert not _is_resume_query(p)
+
+    def test_plain_coding_request_is_not_temporal(self):
+        from centri.coordinator import _is_temporal_query
+        assert not _is_temporal_query("add a new endpoint and write tests")
+
+    def test_extract_since_reads_iso_date_session_or_origin(self):
+        from centri.coordinator import _extract_since
+        assert _extract_since("what changed since 2026-06-10") == "2026-06-10"
+        assert _extract_since("what changed since last session") == "last-session"
+        assert _extract_since("what's new") == ""

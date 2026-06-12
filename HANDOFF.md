@@ -433,9 +433,9 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
       within CENTRI's known-good path; **failures are 3e FINDINGS, not bugs to
       hide** (anti-gaming rule), and emerge once real Hermes material is seeded.
       pytest 275/275.
-- [ ] **3c.2 Temporal narrative** — "what changed since X" + "where did we leave
-      off", a DERIVED VIEW over the photographic spine + bi-temporal graph
-      (Decision 13). **Slice 1 DONE (2026-06-12):** `centri/temporal.py`
+- [x] **3c.2 Temporal narrative** — DONE (2026-06-12). "what changed since X" +
+      "where did we leave off", a DERIVED VIEW over the photographic spine +
+      bi-temporal graph (Decision 13). **Slice 1:** `centri/temporal.py`
       (`TemporalNarrator`, beside `curation_replay.py` so the golden read-surface
       is untouched). `changed_since(anchor)` diffs the live graph against an ISO
       anchor — additions (created after), supersessions (invalidated after,
@@ -454,8 +454,21 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
       (resolves the anchor then narrates) and `GET /memory/where-left-off`. Both
       stay unscoped like `/memory/graph` (one memory across threads), accept an
       optional `repo_id`, return `{available, query, anchor, anchor_kind, lines,
-      text}`. Slice 3 (chat-intent routing) pending. Tests: `test_temporal.py`
-      (16), `test_centri.py::TestTemporal` (3).
+      text}`. **Slice 3 DONE (2026-06-12):** chat-intent routing — a new
+      `temporal` intent in `Coordinator._classify_intent` (checked BEFORE the
+      coding/status heuristics so "what changed"/"add" overlap doesn't mis-route)
+      detects resume phrasings ("where did we leave off", "catch me up", …) and
+      "what changed since <anchor>" via pure module-level matchers
+      (`_is_temporal_query`/`_is_resume_query`/`_extract_since` — ISO date /
+      'last session' / origin). `_handle_temporal` renders the narrator's view
+      (resume → `where_left_off`, else `changed_since`), emits a
+      `coordinator.temporal` event, and returns `response_type="temporal"` with
+      `{query, anchor, anchor_kind, lines}`. The turn is chat-curated like any
+      other non-coding turn (NOT in the curation skip-list), so it still emits one
+      `turn_kind="chat"` `curation.brief`. Honest-unavailable: if no narrator is
+      wired, the intent never fires (falls through to general). Tests:
+      `test_temporal.py` (20: 16 core + 4 intent-matcher), `test_centri.py::TestTemporal`
+      (5: 2 endpoint shape + 1 where-left-off + 2 chat-routing). pytest 299/299.
 - [ ] **3d.1 Waking-up + spontaneous association** — the "feels human"
       proactivity track on 3c.0's machinery: waking-up situating brief on first
       interaction of a session/day, spontaneous association surfacing an
@@ -548,6 +561,19 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
   the only real-machine-pending item remaining is the owner's own-provider ACP
   confirmation (VERIFY.md step 3) and the deploy/Tauri toolchain items.
   pytest 275/275.
+- **3c.2 temporal narrative DONE (2026-06-12):** `centri/temporal.py`
+  `TemporalNarrator` — a pure, receipt-bearing derived view over the spine +
+  bi-temporal graph answering "what changed since X" (`changed_since`: additions,
+  supersessions old→new, open-loop status changes after an ISO anchor) and "where
+  did we leave off" (`where_left_off`: still-open loops + latest decisions + last
+  real activity). `resolve_anchor` handles ISO date / full ISO / `last-session`
+  idle-gap scan / origin. Read-only endpoints `GET /memory/since` +
+  `GET /memory/where-left-off` (unscoped like `/memory/graph`). Chat routing: a
+  `temporal` intent (matched before coding/status, chat-curated, honest-unavailable
+  without a narrator) → `coordinator.temporal` event + `response_type="temporal"`.
+  Same `(graph, anchor)` → byte-identical render (no `now()`/calendar/LLM at read
+  time). Tests: `test_temporal.py` (20), `test_centri.py::TestTemporal` (5).
+  pytest 299/299.
 - **North star v2 (Decision 14, ratified 2026-06-11 PT):** CENTRI is a
   **reasoning partner** — conversational seamlessness first-class, thinks like a
   human with machine superpowers (memory bandwidth, VM tool use, voice). Docs
@@ -650,6 +676,18 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
   payload (the 3c.1 replay harness partitions on it). A coding turn must emit
   exactly ONE `curation.brief` (delegation-side); do not also chat-curate
   `coding_task`/`approval_response` turns or you double-count.
+- 3c.2: `centri/temporal.py` `TemporalNarrator` is a PURE derived view — same
+  `(graph, resolved-anchor)` must render a byte-identical narrative (ISO sorts
+  lexically, so the diff is string comparison; NO `now()`, NO calendar lib, NO
+  LLM at read time, NO confabulation — every line carries a `source_event_id`
+  receipt). An in-window supersession SUPPRESSES the new value's standalone
+  "added" line (narrate the change once, old→new, receipt = the new live value).
+  `/memory/since` + `/memory/where-left-off` stay UNSCOPED like `/memory/graph`.
+  The `temporal` chat intent is matched BEFORE the coding/status heuristics in
+  `_classify_intent`; it is chat-curated (one `turn_kind="chat"` brief), NOT in
+  the curation skip-list. Honest-unavailable when no narrator is wired (intent
+  never fires). The anchor resolver treats a bare `YYYY-MM-DD` as start-of-day
+  UTC and `last-session` as the most-recent idle-gap boundary on the spine.
 
 ## Known traps
 
