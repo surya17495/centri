@@ -256,18 +256,26 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
       digest/drop/floor in real tokens, ambient load/render/exclusion, miss/waste,
       expander honesty, Curator, TokenCounter determinism/fallback/stamp, and a
       byte-identical golden snapshot pinned to `POLICY_VERSION`). pytest 202/202.
-- [ ] **3c.0.2 Universal per-turn curation** — memory quality must be identical
-      in chat and coding (Decision 13); the chat/coding asymmetry is the biggest
-      seam against the vision. Today the full `curate()` brief (ambient + cued,
-      receipts, miss/waste) fires only on coding delegation
-      (`build_delegation_brief`); plain chat turns get only
-      `memory.recall(text, limit=3)`, often stale from the hot cache. Route EVERY
-      utterance through the same `Curator` when wired — chat (`_handle_general`,
-      status/steering as appropriate) gets the same curated ambient+cued brief,
-      receipts, and `curation.brief`/miss-waste instrumentation as delegation.
-      Keep `curate()` pure; hot-cache fast path may serve the AMBIENT layer
-      instantly but the cued layer comes from the live curator per turn (latency
-      tradeoff documented). `MemoryBriefAssembler` stays the bench fallback.
+- [x] **3c.0.2 Universal per-turn curation** — DONE (2026-06-12). Memory quality
+      is now identical in chat and coding (Decision 13). `handle_utterance` routes
+      EVERY chat turn (status / steering / general — everything except
+      `coding_task`/`approval_response`/`stop`, which curate inside
+      `build_delegation_brief`) through the same live `Curator` via the new
+      `Coordinator._curate_chat_context` → shared `_curate_into_packet`
+      (parameterized with `thread_id` override + `turn_kind`). Chat turns now get
+      the curated ambient+cued brief injected into `packet.relevant_recall`, with
+      receipts, and emit `curation.cue` + `curation.brief`/miss-waste events
+      stamped `turn_kind="chat"` (so 3c.1 replay covers chat). `_handle_general`
+      folds the curated brief into its reasoning input (no longer the 3-item
+      `memory.recall`). `curate()` stays pure; the chat thread propagates into the
+      cue so thread-affinity is live for chat threads. **Latency honesty:** the
+      cued layer is recomputed live per turn (a small cost over the warm hot-cache
+      fast path) so chat recall is never served stale — the warm cache's ambient
+      slice still seeds the packet instantly. `MemoryBriefAssembler` untouched
+      (bench fallback). Tests: `test_universal_curation.py` (7: chat
+      ambient+cued, receipts, brief/cue events w/ turn_kind, determinism, live
+      curator overrides stale warm cache, thread-affinity wired for chat, status
+      turn curates). pytest 215/215.
 - [ ] **3c.1 Replay harness + quality-per-token bench + write-time embeddings** —
       replay recorded spines + cues through `curate()`, score quality-per-token
       against the `curation.miss`/`curation.waste` ledger; tiered daily→weekly
@@ -312,10 +320,13 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
   (append-only, lossless, re-derivable), recall human (gist-first curated briefs
   w/ receipt-backed zoom); forgetting is a read-time policy, never write-time
   deletion; 3c.1 digests are derived views. Work item **3c.0.2 universal per-turn
-  curation** inserted ahead of 3c.1.
-- **Next:** 3c.0.2 universal per-turn curation (route chat turns through the same
-  `curate()` Curator path as coding delegation), then 3c.1 / Phase 1 (replay
-  harness + quality-per-token bench + write-time embeddings).
+  curation** inserted ahead of 3c.1. **3c.0.2 DONE:** chat turns now flow through
+  the same live `curate()` Curator path as coding delegation
+  (`Coordinator._curate_chat_context`), with receipts + `curation.brief`/miss-waste
+  events stamped `turn_kind="chat"`; `_handle_general` reasons over the curated
+  brief, not `memory.recall`. pytest 215/215.
+- **Next:** 3c.1 / Phase 1 (memory completion) — replay harness +
+  quality-per-token bench + write-time embeddings (per the work queue below).
 - **Layout:** `core/` Python FastAPI (src/centri/: app.py, db.py, coordinator,
   consolidation, memory_graph, memory_brief, curation, briefing, opencode_config,
   models_catalog, model_router, hands/, ingest/ [base + registry +
@@ -369,6 +380,12 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
 - `Coordinator.build_delegation_brief` uses `Curator` (the live `curate()` path)
   when wired; `MemoryBriefAssembler` is the fallback the bench still uses — do
   not delete it.
+- 3c.0.2: chat turns (status/steering/general) curate through the SAME live
+  `Curator` as coding delegation via `_curate_chat_context` → `_curate_into_packet`.
+  Curation events carry `turn_kind` ("chat"|"delegation") — keep it on the
+  payload (the 3c.1 replay harness partitions on it). A coding turn must emit
+  exactly ONE `curation.brief` (delegation-side); do not also chat-curate
+  `coding_task`/`approval_response` turns or you double-count.
 
 ## Known traps
 

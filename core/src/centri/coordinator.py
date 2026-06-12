@@ -196,6 +196,19 @@ class Coordinator:
         packet, _recall = await self._build_context_parallel(text)
 
         intent = self._classify_intent(text, packet)
+
+        # 3c.0.2 — universal per-turn curation. EVERY chat turn flows through the
+        # same pure curate() Curator path as coding delegation (Decision 13:
+        # memory quality must be identical in chat and coding). Status, steering,
+        # and general chat get the curated ambient + cued brief with receipts and
+        # curation.brief/miss-waste instrumentation, so the 3c.1 replay harness
+        # covers chat too. Coding tasks (and approval responses, which lead into a
+        # coding task) curate inside build_delegation_brief against the hand brief,
+        # so we skip the chat-side curation for them to avoid a duplicate
+        # curation.brief event for the same turn.
+        if intent not in ("coding_task", "approval_response", "stop"):
+            await self._curate_chat_context(packet, text, chat_thread)
+
         if intent == "status":
             resp = await self._handle_status(packet, event_id)
         elif intent == "steering":
@@ -563,8 +576,36 @@ class Coordinator:
 
         return await self._finish_brief(packet, text)
 
+    async def _curate_chat_context(
+        self, packet: ContextPacket, text: str, chat_thread: Optional[str]
+    ) -> bool:
+        """3c.0.2: curate a plain chat turn through the same live curate() path.
+
+        Chat turns previously got only ``memory.recall(text, limit=3)`` (often
+        served stale from the hot cache); this routes them through the Curator so
+        the curated ambient + cued brief — with receipts and
+        ``curation.brief``/miss-waste instrumentation — is the chat context too,
+        identical to coding delegation (Decision 13). The cued layer is computed
+        live per turn (a small latency cost over the cache fast path, accepted so
+        chat recall is never stale); the hot cache's ambient slice still seeds the
+        packet instantly when warm. No-op (returns False) when no curator is
+        wired or the graph yields nothing — the existing recall stays untouched.
+        """
+        if self._curator is None:
+            return False
+        repo_id = packet.repo_state.id if packet.repo_state else None
+        return await self._curate_into_packet(
+            packet, text, repo_id, thread_id=chat_thread, turn_kind="chat"
+        )
+
     async def _curate_into_packet(
-        self, packet: ContextPacket, text: str, repo_id: Optional[str]
+        self,
+        packet: ContextPacket,
+        text: str,
+        repo_id: Optional[str],
+        *,
+        thread_id: Optional[str] = None,
+        turn_kind: str = "delegation",
     ) -> bool:
         """Run the deterministic curator and inject its brief into ``packet``.
 
@@ -573,11 +614,17 @@ class Coordinator:
         provenance, and emits ``curation.miss``/``curation.waste`` instrumentation
         (deterministically, against the assembled brief). Never raises into the
         hand path — a curation failure degrades to the fallback layers.
+
+        ``thread_id`` overrides the packet's active thread (so a chat turn curates
+        against its chat thread, making thread-affinity work for chat). ``turn_kind``
+        ("chat" | "delegation") rides on the curation events so the replay harness
+        can partition chat vs. coding turns.
         """
         from centri import curation as _cur
 
         try:
-            thread_id = (packet.active_thread or {}).get("id") if packet.active_thread else None
+            if thread_id is None:
+                thread_id = (packet.active_thread or {}).get("id") if packet.active_thread else None
             recent_turns = self._recent_user_turns(packet)
             active_files = list(getattr(packet.repo_state, "changed_files", None) or []) if packet.repo_state else []
             active_task = (packet.current_task or {}).get("id") if packet.current_task else None
@@ -601,6 +648,7 @@ class Coordinator:
                 payload={
                     "policy_version": brief.policy_version,
                     "graph_high_water": brief.graph_high_water,
+                    "turn_kind": turn_kind,
                     **self._curator.expander.expansion_log(cue),
                 },
             )
@@ -616,6 +664,7 @@ class Coordinator:
                 repo_id=repo_id,
                 payload={
                     **_cur.curation_breakdown_payload(brief),
+                    "turn_kind": turn_kind,
                     "miss_count": len(misses),
                     "waste_count": len(wastes),
                     "misses": misses,
@@ -742,7 +791,14 @@ class Coordinator:
     async def _handle_general(
         self, text: str, packet: ContextPacket, event_id: str
     ) -> CoordinatorResponse:
-        reply = self._mr.reason(f"User said: {text}\nContext: {self._packet_summary(packet)}\nReply concisely.", output_schema=None)
+        # 3c.0.2: the curated brief (ambient + cued, injected into relevant_recall
+        # by _curate_chat_context) is part of the reasoning context for chat — the
+        # same memory a coding hand would receive, not a separate 3-item recall.
+        context = self._packet_summary(packet)
+        recall = [r for r in (packet.relevant_recall or []) if r]
+        if recall:
+            context += "\nMemory:\n" + "\n".join(recall)
+        reply = self._mr.reason(f"User said: {text}\nContext: {context}\nReply concisely.", output_schema=None)
         return CoordinatorResponse(response_type="info", message=reply or "I'm here.")
 
     # ------------------------------------------------------------------
