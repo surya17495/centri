@@ -512,7 +512,19 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
   mid-turn crash, hung/timeout, oversized chunk, permission timeout,
   cancellation race, restart) all produce honest events + recoverable state;
   found+fixed a real 64 KiB StreamReader line-limit bug (large frames would
-  break the hand) by raising the subprocess limit to 16 MiB. pytest 260/260.
+  break the hand) by raising the subprocess limit to 16 MiB. A3 failover drill
+  DONE — `test_failover.py` kills ACP mid-task and proves run-time degradation
+  to the OpenCode fallback (honest `hand.degraded` trail naming the failed hand,
+  no orphaned running task; honest failure when no fallback remains);
+  `Hands.execute` rewritten to iterate advertisers and degrade on any
+  non-success status or raise. B1 curation parity VERIFIED + a missing-`await`
+  bug in `build_delegation_brief` found+fixed (the live coding path handed a
+  coroutine to the hand as its intent). B2 3e continuity gate SCAFFOLDED
+  (`bench/continuity.py` + `--suite continuity`, four Hermes-failure suites,
+  `# TODO(owner)` stub personas, methodology under test). All sandbox-verified;
+  the only real-machine-pending item remaining is the owner's own-provider ACP
+  confirmation (VERIFY.md step 3) and the deploy/Tauri toolchain items.
+  pytest 275/275.
 - **North star v2 (Decision 14, ratified 2026-06-11 PT):** CENTRI is a
   **reasoning partner** — conversational seamlessness first-class, thinks like a
   human with machine superpowers (memory bandwidth, VM tool use, voice). Docs

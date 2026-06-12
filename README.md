@@ -96,10 +96,26 @@ in the sandbox — namely Rust/cargo for the Tauri desktop binary).
   requests → approval gate, cancellation); router prefers a healthy ACP hand and falls
   back to the OpenCode subprocess; delegation-brief seam enriching hand briefs with
   recent task summaries; SQLite memory store with `rebuild_from_events()`; BYOK model
-  router. Covered by `pytest core/tests/` (74 tests incl. ACP client tests against a
+  router. Covered by `pytest core/tests/` (275 tests incl. ACP client tests against a
   scripted fake agent, plus the Phase 2 memory suite) and the end-to-end
   `scripts/smoke_phase1.sh` (command → task → streamed events → approval round-trip
   over a live WebSocket).
+- **Sandbox-verified (coding-loop hardening, 2026-06-12):** the ACP hand is now
+  exercised against the **real `opencode` binary (v1.17.4)** end-to-end — a live
+  `initialize → session/new → session/prompt → completed` lifecycle, not just the
+  fake agent (`test_acp_hand.py::test_real_opencode_acp_lifecycle`, runs unskipped
+  when `opencode` is on PATH). **ACP error-path conformance** proves the hand stays
+  honest under malformed JSON-RPC, an agent that crashes mid-turn, a hung agent
+  (bounded by `prompt_timeout`), oversized stream frames, permission-request timeout,
+  cancellation races, and restart between turns — each yields an honest event and a
+  recoverable state, never a silent stall or fake success. An **end-to-end failover
+  drill** (`test_failover.py`) kills ACP mid-task and proves the router degrades to
+  the OpenCode fallback with an honest `hand.degraded` trail and **no orphaned running
+  task**; when no fallback remains the task fails honestly. Two real production bugs
+  were found and fixed in this pass: the ACP stdio reader's 64 KiB line limit (would
+  break the hand on legitimate large frames — now 16 MiB) and a missing `await` in
+  `build_delegation_brief` (the live coding path handed a coroutine to the hand as its
+  intent instead of the rendered brief).
 - **Sandbox-verified (Phase 2 memory):** typed memory graph (`memory_graph.py`) with
   decisions/facts/open-loops and bi-temporal supersession (new truth invalidates old,
   history retained, live view shows only current); consolidation worker
@@ -112,6 +128,21 @@ in the sandbox — namely Rust/cargo for the Tauri desktop binary).
   composite vs a **real Letta server** (pgvector archival, `letta_http` mode) at
   **0.93**, with the gap on stale-fact supersession (native 1.00 vs Letta 0.67) — the
   central thesis. See the honest accounting below.
+- **Sandbox-verified (curation parity, 2026-06-12):** chat turns and coding/delegation
+  turns are proven to draw from **one** deterministic `curate()` path (Decision 13 —
+  identical curation quality in both modes), rendering a **byte-identical** brief for
+  the same `(graph, cue, budget, policy)`, both carrying `source_event_id` receipts and
+  matching policy identity, differing only in the `turn_kind` stamp. A coding turn emits
+  exactly one (`delegation`) brief and a chat turn exactly one (`chat`) — no double
+  counting (`test_curation_parity.py`).
+- **Scaffolded (3e continuity gate, 2026-06-12):** a continuity regression gate
+  (`python -m centri.bench.run --suite continuity`, `bench/continuity.py`) with four
+  Hermes-motivated failure-mode suites — unprompted cross-session awareness, fact
+  supersession under config churn, cold-start recall on a fresh client, and awareness
+  of delegated-session work — each scored honestly through the production cold-start
+  path. **Personas are explicit `# TODO(owner)` stubs** awaiting real Hermes transcript
+  material; the methodology is real and under test (`test_continuity.py`), and failing
+  suites are treated as 3e *findings*, never tuned away.
 - **Sandbox-verified (shell frontend):** the React app in `shell/` builds and
   typechecks (`tsc --noEmit` + `vite build`) and runs in a plain browser via
   `npm run dev` — activity timeline, streaming task cards, inline approval cards,
