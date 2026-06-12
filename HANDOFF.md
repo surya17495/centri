@@ -8,7 +8,7 @@ Owner: surya (surya.munna95@gmail.com). Repo: https://github.com/surya17495/cent
    of work). Pushed code is the only safe code; the session may die any time.
    Git identity: `-c user.name="surya17495" -c user.email="surya.munna95@gmail.com"`.
 2. **Quality gates before every push:** `cd core && python -m pytest tests/ -q`
-   (currently 172 passed) and, if `shell/` was touched,
+   (currently 197 passed) and, if `shell/` was touched,
    `cd shell && npm run typecheck && npm run test && npm run build` (14 tests).
 3. **Be honest** in README/docs/reports about sandbox-verified vs
    needs-local-build (Tauri binary, real opencode binary, systemd/Caddy on a VM).
@@ -169,10 +169,48 @@ Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
       `test_opencode_config.py` (8), `test_models_catalog.py` (5),
       `test_ingest_generic.py` (6), `test_centri.py::TestSingleLlmConfig` (3),
       `OnboardingCard.test.tsx` (5). pytest 172/172, vitest 14/14, tsc/build clean.
-- [ ] **3d.1 Open-loop scheduler** — scheduler tick scans open loops, emits
-      one-time `loop.nudge` events per policy window; surfaces in `/briefing`.
-- [ ] **3c.1 Tiered consolidation** — daily/weekly digests + entity pages;
-      brief reads derived layers only.
+- [x] **3c.0 Deterministic context curation** — DONE (2026-06-12). "Context as
+      cache": per-turn context assembled fresh by a pure, versioned
+      `brief = curate(graph_snapshot, cue, budget, policy_version)` — no
+      wall-clock, no randomness, no LLM at read time, so the same inputs render a
+      byte-identical brief. New `centri.curation`:
+      **CueBuilder** (A — alias-table expansion via graph facts tagged `alias`,
+      thread anaphora resolution from recent turns, active-state file/repo
+      signals, one deterministic graph hop), **Ranker** (B — explicit-feature
+      linear sum: overlap BM25-ish / type-prior decision>convention>fact>obs /
+      open-loop-boost / thread-affinity, recency as TIEBREAK ONLY via a numeric
+      ISO ordinal; hard filters via the graph's live views; per-item score
+      breakdowns kept on every line), **Budgeter** (C — greedy knapsack by score,
+      per-section floors so decisions/rejections never starve, full|one-line
+      digest|drop), **Ambient layer** (D — consolidation refreshes a standing
+      digest stored as a reserved Fact `ambient-standing-context`, prepended to
+      every brief in its own budget), and **miss/waste instrumentation** (E —
+      `compute_miss_waste`, emitted as `curation.brief` with receipts;
+      `curation.cue` logs cue-expansion provenance). The optional LLM
+      **CueExpander** seam may EXPAND THE CUE only (never select facts) — it is
+      honest-unavailable in 3c.0 (no model call, deterministic fallback). Wired
+      into the **live** path: `Coordinator.build_delegation_brief` uses `Curator`
+      (boots in `runtime.py`) when present, stamping `policy_version` +
+      graph-high-water; `MemoryBriefAssembler` stays the fallback for the bench.
+      `memory_graph.RESERVED_FACT_TOPICS` keeps the ambient digest out of the
+      general `current_facts` view (still re-derivable). Config: `curation_*`
+      policy knobs. Tests: `test_curation.py` (25: cue building incl.
+      alias/anaphora/graph-hop, every ranker feature + superseded-filter, budgeter
+      digest/drop/floor, ambient load/render/exclusion, miss/waste, expander
+      honesty, Curator, and a byte-identical golden snapshot pinned to
+      `POLICY_VERSION`). pytest 197/197.
+- [ ] **3c.1 Replay harness + quality-per-token bench + write-time embeddings** —
+      replay recorded spines + cues through `curate()`, score quality-per-token
+      against the `curation.miss`/`curation.waste` ledger; tiered daily→weekly
+      digests + entity pages maintained by supersession (digest summarizer behind
+      an optional LLM seam, deterministic fallback); write-time embeddings stored
+      on candidates so stored-vector similarity slots into the ranker as pure
+      arithmetic (the `Candidate.vector` slot is already shaped for it).
+- [ ] **3d.1 Waking-up + spontaneous association** — the "feels human"
+      proactivity track on 3c.0's machinery: waking-up situating brief on first
+      interaction of a session/day, spontaneous association surfacing an
+      unusually-high-scoring past item, and the open-loop scheduler (tick scans
+      live open loops → `loop.nudge` per policy window → `/briefing`).
 - [ ] **3e Continuity bench** — extend `core/src/centri/bench/` with
       unprompted-recall / supersession-churn / cold-start / delegated-work
       scenarios; wire as regression gate.
@@ -186,13 +224,18 @@ Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
   global memory), 3b.3 OpenCode ingestion adapter, 3b.4 memory bootstrap
   (ingest adapter registry + Claude Code/Cursor adapters + discovery +
   one-shot import), 3b.5 onboarding + single LLM config (OpenCode provider
-  reuse + models.dev catalog + generic adapter + first-run import card).
+  reuse + models.dev catalog + generic adapter + first-run import card),
+  3c.0 deterministic context curation (pure `curate()` = ambient + cued layers,
+  explicit-feature ranker, knapsack budgeter, miss/waste instrumentation, wired
+  into the live `build_delegation_brief` path via `Curator`).
   Decisions ratified (shared-core continuity, OpenCode-via-ACP default,
-  deterministic memory, north star, single-LLM-config) — see
-  `docs/ROADMAP.md` → "Decisions". pytest 172/172, vitest 14/14, tsc/build clean.
-- **Next:** 3d.1 open-loop scheduler (per the work queue order below).
+  deterministic memory, north star, single-LLM-config, context-as-cache +
+  deterministic-curation + no-visible-remembering/ambient) — see
+  `docs/ROADMAP.md` → "Decisions". pytest 197/197, vitest 14/14, tsc/build clean.
+- **Next:** 3c.1 replay harness + quality-per-token bench + write-time
+  embeddings (per the revised work queue below).
 - **Layout:** `core/` Python FastAPI (src/centri/: app.py, db.py, coordinator,
-  consolidation, memory_graph, memory_brief, briefing, opencode_config,
+  consolidation, memory_graph, memory_brief, curation, briefing, opencode_config,
   models_catalog, model_router, hands/, ingest/ [base + registry +
   opencode/claude_code/cursor/generic adapters], bench/);
   `shell/` React+TS+Tailwind (+ Tauri scaffold; components/OnboardingCard);
@@ -224,6 +267,19 @@ Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
   `coordinator.response` carry `thread_id`; the shell shows frames matching the
   active thread plus any frame with no `thread_id` (global). Coding tasks still
   spin their own work-thread per task — separate from the chat thread.
+- `curate()` is pure: NO wall-clock, NO randomness, NO LLM at read time. Same
+  `(graph_snapshot, cue, budget, policy_version)` must render a byte-identical
+  brief (the golden snapshot pins this). Recency is a TIEBREAK ONLY via the
+  stored-timestamp ordinal, never `now()`. Bump `POLICY_VERSION` (and add a new
+  golden) for any deliberate brief-shape change. The cue-expander seam may only
+  EXPAND THE CUE (add query terms), never select facts.
+- The ambient digest is a reserved Fact (`ambient-standing-context`, tag
+  `ambient`) excluded from the general `current_facts` view via
+  `RESERVED_FACT_TOPICS` — keep it out of the cued candidate set and out of any
+  exact `current_facts` count assertions; read it with `include_reserved=True`.
+- `Coordinator.build_delegation_brief` uses `Curator` (the live `curate()` path)
+  when wired; `MemoryBriefAssembler` is the fallback the bench still uses — do
+  not delete it.
 
 ## Known traps
 
@@ -234,3 +290,6 @@ Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
 - Settings hands list shows per-capability rows (duplicate-looking) — known
   cosmetic, leave it.
 - `core_token` in config.py is legacy/unused; auth uses `auth_token`.
+- 3c.0 `curation.miss`/`curation.waste` are emitted at brief time scored against
+  the *cue* as the stand-in "turn text" — full resulting-transcript scoring is
+  3c.1's replay harness. The event shape is final; the scoring input gets richer.
