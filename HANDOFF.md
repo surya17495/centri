@@ -41,6 +41,17 @@ Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
    summarization digests in 3c.1, (b) future semantic top-k recall.
    Re-derivability from the event ledger (`rebuild_from_events()`) stays an
    invariant.
+4. **North star — "OpenCode with photographic memory."** Wedge = OpenCode's
+   simplicity + clean UI + memory of everything; then voice; then desktop-agent
+   tools (browser/automations); trajectory = Jarvis. Scope test for every
+   feature: *better OpenCode-with-memory, or premature Jarvis?*
+5. **Single LLM config — never configure providers twice.** OpenCode's provider
+   config/auth is the source of truth: the default hand uses it natively, CENTRI
+   reuses it for the coordinator / optional seams where resolvable. Only
+   non-default hands (Cursor, Claude Code) own their own config. `CENTRI_*` env
+   keys win; OpenCode auth is fallback; honest-unavailable otherwise. models.dev
+   is the UI model catalog (catalog only; LiteLLM is the Python transport). Key
+   material never written/logged; redacted in events.
 
 ## Work queue (do in order; each is one commit+push)
 

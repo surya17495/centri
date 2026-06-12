@@ -29,6 +29,23 @@ below.
    top-k recall. **Re-derivability from the event ledger remains an
    invariant** — the graph must always be reconstructable via
    `rebuild_from_events()`.
+4. **North star — "OpenCode with photographic memory."** The wedge is OpenCode's
+   simplicity and clean UI *plus* memory of everything we did; then voice input;
+   then desktop-agent tools (browser, automations). The trajectory is Jarvis, but
+   we get there by being the best OpenCode-with-memory first, not by reaching for
+   Jarvis early. **Scope test for any feature:** *does this make us a better
+   OpenCode-with-memory, or is it premature Jarvis?* If it is the latter, it
+   waits.
+5. **Single LLM config — users never configure LLM providers twice.** OpenCode's
+   own provider config/auth is the **source of truth** for model access. The
+   default coding hand (OpenCode-over-ACP) uses it natively, and CENTRI **reuses**
+   it for the coordinator and the optional model seams wherever a provider key is
+   resolvable there. Only *non-default* hands (Cursor, Claude Code, etc.) own
+   their own config. `CENTRI_*` env keys still win when present; OpenCode's auth
+   is a fallback; honest-unavailable when neither exists. The model catalog for UI
+   display comes from **models.dev** (catalog only — LiteLLM remains the Python
+   transport for actual calls). Key material is never written or logged; it is
+   redacted in events.
 
 ## Phase 0 — Foundation (this phase)
 
