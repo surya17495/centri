@@ -115,6 +115,82 @@ Hard rules for the worker:
 - **Never confabulate.** If an outcome cannot be attributed to an event, store
   `"outcome unknown"` rather than inventing a result.
 
+### Sleep-time consolidation via a proposal contract (two tiers)
+
+The consolidation worker above is the **deterministic tier**: it reads structured
+*synthesis hints* off events (a `fact` / `decision` block on the payload) and folds
+them into the graph with no model in the loop. That tier is authoritative and
+unchanged.
+
+But most experience arrives as **unhinted** raw text — `hand.stdout`, transcripts,
+tool output — with no hint a deterministic rule can key off. To capture it without
+confabulation, CENTRI adds a **second, optional LLM tier** governed by a strict
+*proposal contract*:
+
+> The model never writes the graph. It only proposes a JSON array of typed ops.
+> A deterministic gatekeeper validates each op and decides apply-or-reject, then
+> stamps a provenance receipt into the spine.
+
+This is the Letta sleep-time-compute idea ([sleep-time
+compute](https://arxiv.org/abs/2504.13171)) bent to fit the "events are truth"
+invariant: the LLM is a *proposer*, the deterministic code is the *authority*, and
+every write is receipted back to a source event.
+
+**The op schema** (`add_fact`, `add_decision`, `open_loop`, `close_loop`,
+`supersede`, `finish`):
+
+| Op             | Required fields                       | Optional       |
+|----------------|---------------------------------------|----------------|
+| `add_fact`     | `topic`, `statement`                  | `tags`         |
+| `add_decision` | `topic`, `statement`                  |                |
+| `open_loop`    | `intent`                              |                |
+| `close_loop`   | `loop_id` **or** `intent_match`       |                |
+| `supersede`    | `node_id`, `kind`, `new_statement`    |                |
+| `finish`       | —                                     |                |
+
+**The gatekeeper rejects** — never silently — on: malformed/non-array JSON; an
+unknown op; a missing required field; a `supersede` whose target is not a live node
+of that kind; a near-duplicate of an existing live node; and **relative-time
+language** (`today`, `yesterday`, `recently`, …) in a statement, since a memory
+that says "shipped the parser today" rots the moment it is stored. Statements must
+carry absolute dates.
+
+**Provenance receipts** are first-class spine events:
+`consolidation.proposal.applied` and `consolidation.proposal.rejected` each carry
+the op, the `source_event_ids`, the model id, and (on reject) the reason; a
+`consolidation.batch` event carries the token usage for the run. The ledger thus
+records not just *what* the LLM tier wrote but *why every proposal was accepted or
+refused* — auditable after the fact, with token discipline.
+
+**Triggering.** The tier piggybacks on the consolidation tick. The scheduler stages
+unhinted events into a backlog and fires the tier when the backlog reaches a batch
+size (`CENTRI_CONSOLIDATION_BATCH_SIZE`, default 8) **or** when a staleness bound is
+exceeded, so a slow trickle still gets consolidated. The deterministic tier still
+sees the same window and still ignores unhinted events — the two tiers never
+double-write because each reads a disjoint slice (hinted vs. unhinted).
+
+**Honest-unavailable.** The tier needs an OpenAI-compatible endpoint
+(`CENTRI_CONSOLIDATION_BASE_URL` + `CENTRI_CONSOLIDATION_MODEL`, with the key
+injected at runtime). With nothing configured the tier reports unavailable and does
+nothing; the deterministic tier is unaffected. A live smoke check lives at
+[`scripts/live_consolidation_check.py`](../scripts/live_consolidation_check.py).
+
+**Swappable proposer.** The proposer is a thin client behind `resolve_consolidation_client`.
+Because the *contract* (propose ops → gatekeeper applies → receipt) is what is
+load-bearing, the proposer is replaceable: a future `LettaConsolidator` that runs
+Letta's sleep-time agent could emit the same op array and reuse the same
+deterministic gatekeeper unchanged. The schema is the decision; the proposer is
+swappable — the same posture as "schema is the decision; the engine is swappable"
+above.
+
+> **Note on Decision 3.** The Phase 2 ROADMAP recorded "no LLMs in the consolidation
+> loop" to keep synthesis deterministic and cheap. The proposal contract supersedes
+> that decision narrowly: LLMs may *propose*, but they still never *write* — the
+> deterministic gatekeeper remains the sole authority, so the original intent
+> (deterministic, auditable, non-confabulating memory) is preserved while raw
+> unhinted experience finally gets captured. The deterministic hint path remains the
+> default and runs with no model configured.
+
 ### Cue-driven injection (not query-driven retrieval)
 
 Memory is **assembled and pushed**, not waited-for-and-queried. Injection cues are

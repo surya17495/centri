@@ -40,6 +40,8 @@ class Scheduler:
         dormancy_days: float = 7.0,
         ingestor: Any = None,
         ingest_db_path: str = "",
+        llm_tier: Any = None,
+        llm_staleness_ticks: int = 4,
     ):
         self._db = db
         self._jobs = jobs
@@ -51,6 +53,13 @@ class Scheduler:
         self._dormancy_days = dormancy_days
         self._ingestor = ingestor
         self._ingest_db_path = ingest_db_path
+        # LLM consolidation tier (Increment 3) — processes unhinted events that the
+        # deterministic tier ignores. It carries its own backlog so it can wait for
+        # a full batch (size threshold) without re-reading the spine each tick.
+        self._llm_tier = llm_tier
+        self._llm_staleness_ticks = max(1, int(llm_staleness_ticks))
+        self._llm_backlog: List[dict] = []
+        self._llm_idle_ticks = 0
         self._task: Optional[asyncio.Task] = None
         self._interval = 30.0
         # High-water mark: only consolidate events newer than this timestamp.
@@ -87,6 +96,8 @@ class Scheduler:
         await self.run_ingestion()
         # Consolidation ("sleep cycle") — fold new events into typed memory.
         await self.run_consolidation()
+        # LLM consolidation tier — propose typed ops from unhinted events.
+        await self.run_llm_consolidation()
         # Dormancy detection — surface stale open loops once.
         await self.detect_dormant_loops()
         # Health snapshot
@@ -161,9 +172,48 @@ class Scheduler:
 
         if not fresh:
             return 0
+        # Stage unhinted events for the LLM tier before the deterministic fold so
+        # the two tiers see the same window; the deterministic tier still ignores
+        # unhinted events (it only reads hints).
+        if self._llm_tier is not None and getattr(self._llm_tier, "available", False):
+            from centri.consolidation import event_has_hints
+
+            for ev in fresh:
+                if not event_has_hints(ev.get("payload") or {}):
+                    self._llm_backlog.append(ev)
         written = await self._consolidator.consume_events(fresh)
         self._last_consolidated_ts = newest_ts
         return written
+
+    async def run_llm_consolidation(self) -> dict:
+        """Run the LLM consolidation tier when the unhinted backlog is ready.
+
+        Triggers when the backlog reaches the tier's batch threshold OR when
+        staleness is exceeded (``llm_staleness_ticks`` idle ticks with a non-empty
+        backlog). Drains the backlog on a run. Honest-unavailable: no tier / no
+        backlog → no-op. Never raises into the tick.
+        """
+        tier = self._llm_tier
+        if tier is None or not getattr(tier, "available", False):
+            return {"ran": False}
+        if not self._llm_backlog:
+            self._llm_idle_ticks = 0
+            return {"ran": False}
+
+        threshold = getattr(tier, "_batch_threshold", 8)
+        self._llm_idle_ticks += 1
+        stale = self._llm_idle_ticks >= self._llm_staleness_ticks
+        if len(self._llm_backlog) < threshold and not stale:
+            return {"ran": False}
+
+        batch = self._llm_backlog
+        self._llm_backlog = []
+        self._llm_idle_ticks = 0
+        try:
+            return await tier.consume_unhinted(batch, force=True)
+        except Exception:
+            logger.debug("LLM consolidation pass failed", exc_info=True)
+            return {"ran": False}
 
     # ------------------------------------------------------------------
     # Dormancy detection

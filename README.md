@@ -234,3 +234,46 @@ faithfully, with two documented deviations forced by the sandbox:
 
 All configuration is environment-driven (see `.env.example`). No secrets are
 committed; `.env` and `*.db` are gitignored.
+
+### Embeddings (semantic recall)
+
+Embeddings are **off by default** — the `NullEmbeddingProvider` writes no vectors
+and the suite runs fully offline. Recall stays purely lexical until you turn the
+semantic leg on, which is a deliberate, documented one-line change.
+
+Two provider options, both OpenAI-compatible and provider-agnostic:
+
+- **Local (preferred, no network):** set `CENTRI_EMBEDDING_LOCAL_MODEL`
+  (e.g. `BAAI/bge-small-en-v1.5`) — requires the optional `fastembed` package.
+- **Network route (LiteLLM):** enable the route and pin a model, pointing the
+  LiteLLM transport at any `/v1/embeddings` endpoint. With Nebius Token Factory:
+
+  ```bash
+  CENTRI_EMBEDDING_ENABLED=true
+  CENTRI_EMBEDDING_MODEL=openai/Qwen/Qwen3-Embedding-8B
+  LITELLM_BASE_URL=https://api.tokenfactory.nebius.com/v1/
+  LITELLM_API_KEY=your-nebius-token-factory-key
+  ```
+
+  A bare id (e.g. `Qwen/Qwen3-Embedding-8B`) is auto-prefixed with `openai/`
+  when a custom `LITELLM_BASE_URL` is set, so litellm routes via its
+  openai-compatible path instead of misreading `Qwen/` as a provider.
+
+Vectors are computed **at write time** (in consolidation); read-time ranking is
+pure cosine arithmetic, so the `curate()` purity / golden contract is preserved.
+A vector only *moves* a score when its weight is positive — set
+`CENTRI_CURATION_W_EMBEDDING_SIMILARITY` (e.g. `0.3`) to enable semantic recall,
+which bumps the policy version to `3c.1-embed` (its own golden). Leaving it at
+`0.0` keeps the pre-embedding briefs byte-identical.
+
+After enabling on an existing install, backfill vectors for nodes written before
+embeddings were on:
+
+```bash
+centri memory rebuild --embed        # re-derive the graph from the event spine
+# or, in-process and idempotent:
+curl -XPOST localhost:8760/memory/embeddings/backfill
+```
+
+When no provider is configured these degrade honestly — the rebuild still
+succeeds, it just writes no vectors and reports `embedding:unavailable`.

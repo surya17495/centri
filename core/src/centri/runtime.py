@@ -34,6 +34,7 @@ class Runtime:
         self.briefing_builder: Any = None
         self.memory_graph: Any = None
         self.consolidator: Any = None
+        self.consolidation_tier: Any = None
         self.opencode_ingestor: Any = None
         self.ingest_registry: Any = None
         self.opencode_config: Any = None
@@ -109,6 +110,22 @@ class Runtime:
             event_bus=self.event_bus,
             embedding_provider=self.embedding_provider,
         )
+        # LLM consolidation tier (Increment 3): a second, optional tier that
+        # proposes typed ops from UNHINTED events via the proposal contract.
+        # Honest-unavailable when no consolidation LLM is configured — the
+        # deterministic tier above is unaffected.
+        from centri.consolidation import ConsolidationLLMTier
+        from centri.consolidation_llm import resolve_consolidation_client
+
+        consolidation_client = resolve_consolidation_client(settings)
+        self.consolidation_tier = ConsolidationLLMTier(
+            self.db,
+            self.memory_graph,
+            client=consolidation_client,
+            event_bus=self.event_bus,
+            embedding_provider=self.embedding_provider,
+            batch_threshold=settings.consolidation_batch_size,
+        )
         # Ingestion adapter registry (3b.4): OpenCode + Claude Code + Cursor share
         # one HWM/idempotency/redaction core. opencode_ingestor stays the OpenCode
         # adapter so the 3b.3 endpoint + scheduler contract is unchanged.
@@ -154,6 +171,7 @@ class Runtime:
             event_bus=self.event_bus,
             ingestor=self.opencode_ingestor,
             ingest_db_path=settings.opencode_ingest_db,
+            llm_tier=self.consolidation_tier,
         )
 
         # 10. Model router — reuses OpenCode's provider auth as a key fallback.
@@ -185,6 +203,8 @@ class Runtime:
             memory_brief=self.memory_brief,
             curator=self.curator,
             temporal_narrator=self.temporal_narrator,
+            proactive_brief=self.proactive_brief,
+            session_brief_enabled=settings.session_brief,
         )
 
         # 15. Wire event bus -> hot cache
@@ -199,6 +219,16 @@ class Runtime:
 
         # 17. Start scheduler
         await self.scheduler.start()
+
+        # 18. Session-start push briefing (Increment 2). Build the deterministic,
+        # LLM-free proactive brief and surface it unprompted — emitted as a
+        # brief.session_start spine event (shells render it) and stashed for the
+        # first turn's curated context. Default on; CENTRI_SESSION_BRIEF=0 disables.
+        # Never fatal to boot.
+        try:
+            await self.coordinator.emit_session_brief()
+        except Exception:
+            logger.debug("Session-start brief emission failed", exc_info=True)
 
         logger.info("CENTRI booted.")
 

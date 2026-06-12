@@ -124,6 +124,27 @@ class Settings:
     embedding_local_model: str = ""   # e.g. "BAAI/bge-small-en-v1.5" (fastembed)
     embedding_model: str = ""         # network model id for the LiteLLM route
 
+    # LLM consolidation tier (Increment 3). A SECOND consolidation tier processes
+    # only events with NO deterministic synthesis hint (raw stdout, transcripts):
+    # the LLM proposes typed ops, a deterministic gatekeeper applies/rejects them
+    # with provenance receipts. The deterministic hint path stays authoritative
+    # and untouched. Honest-unavailable: with no base_url+model the tier does
+    # nothing. Generic OpenAI-compatible (base_url + api_key + model), Nebius-ready
+    # but provider-agnostic. Batch runs when the unhinted backlog reaches
+    # consolidation_batch_size (default 8). The API key is injected at runtime by
+    # the orchestrator; never hardcode it.
+    consolidation_base_url: str = ""
+    consolidation_api_key: str = ""
+    consolidation_model: str = ""
+    consolidation_batch_size: int = 8
+
+    # Session-start push briefing (Increment 2). On session start CENTRI builds
+    # the deterministic, LLM-free ProactiveBrief and surfaces it unprompted — as a
+    # brief.session_start spine event (shells render it) and as the first turn's
+    # curated context. Default ON because it is cheap (no model call). Set
+    # CENTRI_SESSION_BRIEF=0 to disable.
+    session_brief: bool = True
+
     # Autonomy
     autonomy_level: str = "autonomous_local"
     auto_commit: bool = True
@@ -202,6 +223,11 @@ class Settings:
             embedding_model=os.getenv("CENTRI_EMBEDDING_MODEL", ""),
             enabled_hands=enabled_hands,
             hand_priority=hand_priority,
+            consolidation_base_url=os.getenv("CENTRI_CONSOLIDATION_BASE_URL", ""),
+            consolidation_api_key=os.getenv("CENTRI_CONSOLIDATION_API_KEY", ""),
+            consolidation_model=os.getenv("CENTRI_CONSOLIDATION_MODEL", ""),
+            consolidation_batch_size=int(os.getenv("CENTRI_CONSOLIDATION_BATCH_SIZE", "8")),
+            session_brief=os.getenv("CENTRI_SESSION_BRIEF", "true").lower() not in ("0", "false", "no", "off"),
             autonomy_level=os.getenv("CENTRI_AUTONOMY_LEVEL", "autonomous_local"),
             auto_commit=os.getenv("CENTRI_AUTO_COMMIT", "true").lower() == "true",
             auto_push=os.getenv("CENTRI_AUTO_PUSH", "false").lower() == "true",

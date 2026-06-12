@@ -22,13 +22,21 @@ below.
    `hand_priority`). The native OpenCode subprocess hand is **demoted to a
    degraded fallback** (kept, not deleted). Real-binary verification is still
    pending on a real machine.
-3. **Memory management stays deterministic — no LLMs in the consolidation
-   loop.** The sleep cycle folds typed event hints into the graph with no model
-   call. LLMs are allowed **only** behind optional seams that have deterministic
-   fallbacks: (a) tiered summarization digests in 3c.1, (b) future semantic
-   top-k recall. **Re-derivability from the event ledger remains an
+3. **Memory writes stay deterministic — an LLM may propose, only the gatekeeper
+   writes.** The deterministic sleep cycle folds typed event *hints* into the
+   graph with no model call, and remains the authoritative default. An optional
+   **second tier** (Memory v2 / Increment 3) lets an LLM consolidate *unhinted*
+   raw experience (stdout, transcripts) by emitting a JSON array of typed ops —
+   but it **never writes the graph**: a deterministic gatekeeper validates each
+   op (schema, live supersede target, dedupe, absolute-date hygiene) and
+   apply-or-rejects it with a provenance receipt. This narrowly amends the
+   original "no LLMs in the consolidation loop" rule: the LLM is a *proposer*,
+   not a *writer*, so determinism and auditability are preserved. Other LLM seams
+   stay behind deterministic fallbacks: (a) tiered summarization digests in 3c.1,
+   (b) semantic top-k recall. **Re-derivability from the event ledger remains an
    invariant** — the graph must always be reconstructable via
-   `rebuild_from_events()`.
+   `rebuild_from_events()`. See
+   [`memory-architecture.md`](memory-architecture.md#sleep-time-consolidation-via-a-proposal-contract-two-tiers).
 4. **North star — "OpenCode with photographic memory."** The wedge is OpenCode's
    simplicity and clean UI *plus* memory of everything we did; then voice input;
    then desktop-agent tools (browser, automations). The trajectory is Jarvis, but
@@ -205,6 +213,26 @@ Design: [`memory-architecture.md`](memory-architecture.md). Benchmark:
   the whole graph from the ledger before assembling each brief).
 - ✅ Escape-hatch validation: `LettaMemoryStore` adapter run head-to-head against
   CENTRI native in `centri-bench` (`python -m centri.bench.run`).
+
+**Memory v2 (live embeddings + session brief + LLM consolidation).** Three
+increments shipped on top of the Phase 2 substrate, all honest-unavailable by
+default so the green offline suite is unchanged:
+
+- ✅ **Write-time embeddings activated.** The consolidation path embeds candidates
+  at write time via a resolved provider; turning on a positive
+  `curation_w_embedding_similarity` lets stored-vector semantic similarity move a
+  curation score (a deliberate `POLICY_VERSION` bump). Off by default
+  (`NullEmbeddingProvider`) so the golden brief stays byte-identical.
+- ✅ **Session-start push briefing.** On session start CENTRI builds the
+  deterministic, LLM-free `ProactiveBrief` and surfaces it unprompted — emitted as
+  a `brief.session_start` spine event and stashed for the first turn's curated
+  context. Default on (`CENTRI_SESSION_BRIEF=0` disables); never fatal to boot.
+- ✅ **LLM consolidation tier (proposal contract).** A second consolidation tier
+  proposes typed ops from *unhinted* events; a deterministic gatekeeper
+  applies/rejects with provenance receipts (see Decision 3 and
+  [`memory-architecture.md`](memory-architecture.md#sleep-time-consolidation-via-a-proposal-contract-two-tiers)).
+  Honest-unavailable with no `CENTRI_CONSOLIDATION_*` config; live smoke check at
+  `scripts/live_consolidation_check.py`.
 
 **Anti-gaming rule:** `centri-bench` tasks are written *before* Phase 2
 implementation starts — `docs/centri-bench.md` is that commitment, so the

@@ -165,6 +165,25 @@ class ModelRouter:
     def _has_supported_provider_prefix(self, model: str) -> bool:
         return model.startswith(("openai/", "nebius/"))
 
+    def _embed_model_for_custom_base(self, model: str) -> str:
+        """Prepend ``openai/`` to a bare embedding id when a custom base URL is set.
+
+        With ``LITELLM_BASE_URL`` pointed at an OpenAI-compatible endpoint, litellm
+        parses a leading ``Qwen/`` (etc.) as an unknown *provider* and raises
+        "LLM Provider NOT provided". Its openai-compatible route honors ``api_base``,
+        so prefixing ``openai/`` routes the call correctly. No base URL → unchanged.
+        """
+        if not self._litellm_base_url:
+            return model
+        if self._has_supported_provider_prefix(model):
+            return model
+        logger.debug(
+            "ModelRouter prefixing embedding model %r -> openai/%s for custom base URL",
+            model,
+            model,
+        )
+        return f"openai/{model}"
+
     def _looks_like_openai_model(self, model: str) -> bool:
         prefixes = ("gpt-", "o1", "o3", "o4", "text-embedding-", "omni-")
         return model.startswith(prefixes)
@@ -297,14 +316,30 @@ class ModelRouter:
     # ------------------------------------------------------------------
     # Embeddings with LRU caching
     # ------------------------------------------------------------------
-    def embed(self, texts: List[str]) -> Optional[List[List[float]]]:
+    def embed(self, texts: List[str], model: Optional[str] = None) -> Optional[List[List[float]]]:
         if litellm is None:
             logger.warning("litellm not installed; embed skipped")
             return None
         resolved = self._resolve_model("embeddings")
+        # An explicit model wins over the role default so a provider configured
+        # purely via CENTRI_EMBEDDING_MODEL (no MODEL_EMBEDDINGS role) still
+        # resolves: reuse the role's transport (proxy/key/base) but swap the model.
+        if model:
+            if resolved is None:
+                resolved = self._resolve_model("fast_reply")
+            if resolved is not None:
+                resolved = ResolvedModel(
+                    role="embeddings",
+                    model=self._normalize_direct_model(model) if not resolved.via_proxy else model,
+                    api_key=resolved.api_key,
+                    api_base=resolved.api_base,
+                    via_proxy=resolved.via_proxy,
+                )
         if resolved is None:
             logger.warning("Embedding model not configured")
             return None
+
+        embed_model = self._embed_model_for_custom_base(resolved.model)
 
         # Cache hit / miss split
         results_by_text: Dict[str, Optional[List[float]]] = {}
@@ -324,7 +359,7 @@ class ModelRouter:
         if texts_to_fetch:
             try:
                 response = litellm.embedding(
-                    model=resolved.model,
+                    model=embed_model,
                     input=texts_to_fetch,
                     api_key=resolved.api_key,
                     api_base=resolved.api_base,
