@@ -389,6 +389,25 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
       thin wrapper over `_advertisers()`. `Jobs._run_job` already guarantees a
       terminal task state on every path, so "no orphaned running task" holds
       structurally. pytest 262/262.
+- [x] **B1 3c.0.2 chat/coding curation parity — VERIFIED + bug fixed** (2026-06-12).
+      Audited the suspects (`coordinator.py` ~268/325 `memory.recall(text, limit=3)`
+      and `context.py`): those are only the hot-cache/cold *seed*; every non-coding
+      chat turn then runs `_curate_chat_context` → the SAME `_curate_into_packet`
+      → same `Curator.assemble()` → same pure `curate()` as
+      `build_delegation_brief`, appending the curated brief on top of (and not
+      replacing) the seed. So 3c.0.2 parity is genuinely implemented. Added
+      `test_curation_parity.py` (6) proving it structurally: chat and delegation
+      render a **byte-identical** brief for the same `(graph, cue, budget,
+      policy)`; both carry matching policy identity (`policy_version` /
+      `tokenizer_stamp` / `embedding_stamp`) differing only in `turn_kind`; both
+      carry `source_event_id` receipts; a coding turn emits **exactly one**
+      `curation.brief` (`turn_kind=delegation`, no chat double-count) and a chat
+      turn exactly one (`turn_kind=chat`). **Real bug found + fixed:**
+      `build_delegation_brief` returned `self._finish_brief(...)` WITHOUT `await`
+      on the curator-injected path (line 564) — the live coding path handed a
+      *coroutine object* to the hand as `user_intent` instead of the rendered
+      brief. Now awaited; pinned by
+      `test_delegation_brief_returns_a_string_not_a_coroutine`. pytest 268/268.
 - [ ] **3d.1 Waking-up + spontaneous association** — the "feels human"
       proactivity track on 3c.0's machinery: waking-up situating brief on first
       interaction of a session/day, spontaneous association surfacing an

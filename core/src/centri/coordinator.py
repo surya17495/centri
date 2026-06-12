@@ -561,7 +561,7 @@ class Coordinator:
         if self._curator is not None:
             injected = await self._curate_into_packet(packet, text, repo_id)
             if injected:
-                return self._finish_brief(packet, text)
+                return await self._finish_brief(packet, text)
         elif self._memory_brief is not None:
             try:
                 section = await self._memory_brief.assemble(text, repo_id=repo_id)
