@@ -138,3 +138,62 @@ def test_model_router_role_models_reports_resolved_transport(
         "via_proxy": True,
         "api_base": "http://localhost:4000/v1",
     }
+
+
+def test_embed_auto_prefixes_bare_model_for_custom_base(
+    monkeypatch: pytest.MonkeyPatch, fake_litellm: _FakeLiteLLM
+):
+    model_router_module._EMBED_CACHE.clear()
+    monkeypatch.setattr(
+        config_module,
+        "_settings",
+        Settings(
+            litellm_base_url="https://api.tokenfactory.nebius.com/v1",
+            litellm_api_key="tf-key",
+            model_embeddings="Qwen/Qwen3-Embedding-8B",
+        ),
+    )
+    router = ModelRouter()
+
+    router.embed(["custom-base text"])
+    assert fake_litellm.embedding_calls[-1]["model"] == "openai/Qwen/Qwen3-Embedding-8B"
+
+
+def test_embed_leaves_already_prefixed_model_unchanged(
+    monkeypatch: pytest.MonkeyPatch, fake_litellm: _FakeLiteLLM
+):
+    model_router_module._EMBED_CACHE.clear()
+    monkeypatch.setattr(
+        config_module,
+        "_settings",
+        Settings(
+            litellm_base_url="https://api.tokenfactory.nebius.com/v1",
+            litellm_api_key="tf-key",
+            model_embeddings="openai/Qwen/Qwen3-Embedding-8B",
+        ),
+    )
+    router = ModelRouter()
+
+    router.embed(["already prefixed text"])
+    assert fake_litellm.embedding_calls[-1]["model"] == "openai/Qwen/Qwen3-Embedding-8B"
+
+
+def test_embed_does_not_prefix_without_custom_base(
+    monkeypatch: pytest.MonkeyPatch, fake_litellm: _FakeLiteLLM
+):
+    model_router_module._EMBED_CACHE.clear()
+    monkeypatch.setattr(
+        config_module,
+        "_settings",
+        Settings(
+            litellm_base_url="",
+            litellm_api_key="",
+            nebius_api_key="neb-key",
+            nebius_base_url="https://api.studio.nebius.ai/v1",
+            model_embeddings="nebius/Qwen/Qwen3-Embedding-8B",
+        ),
+    )
+    router = ModelRouter()
+
+    router.embed(["no custom base text"])
+    assert fake_litellm.embedding_calls[-1]["model"] == "nebius/Qwen/Qwen3-Embedding-8B"

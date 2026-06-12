@@ -250,10 +250,14 @@ Two provider options, both OpenAI-compatible and provider-agnostic:
 
   ```bash
   CENTRI_EMBEDDING_ENABLED=true
-  CENTRI_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-8B
+  CENTRI_EMBEDDING_MODEL=openai/Qwen/Qwen3-Embedding-8B
   LITELLM_BASE_URL=https://api.tokenfactory.nebius.com/v1/
   LITELLM_API_KEY=your-nebius-token-factory-key
   ```
+
+  A bare id (e.g. `Qwen/Qwen3-Embedding-8B`) is auto-prefixed with `openai/`
+  when a custom `LITELLM_BASE_URL` is set, so litellm routes via its
+  openai-compatible path instead of misreading `Qwen/` as a provider.
 
 Vectors are computed **at write time** (in consolidation); read-time ranking is
 pure cosine arithmetic, so the `curate()` purity / golden contract is preserved.
