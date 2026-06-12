@@ -359,6 +359,13 @@ async def ingest_discover() -> Dict[str, Any]:
     if runtime.ingest_registry is None:
         return {"available": False, "reason": "ingestion subsystem not booted", "sources": []}
     summary = runtime.ingest_registry.discover_summary()
+    # First-run onboarding flag derives from the backend (has any source been
+    # ingested?), not client localStorage — so a fresh client still knows whether
+    # memory has already been seeded.
+    try:
+        summary["bootstrapped"] = await runtime.db.has_ingest_state()
+    except Exception:  # noqa: BLE001
+        summary["bootstrapped"] = False
     # Single-LLM-config (3b.5): also surface providers already configured in
     # OpenCode so onboarding can say "your OpenCode providers are reused" without
     # a second config step. Key material is never included — has_key only.

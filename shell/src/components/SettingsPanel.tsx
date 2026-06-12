@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, getAuthToken, getBackendUrl, setAuthToken, setBackendUrl } from "../api";
-import type { StatusResponse } from "../types";
+import type { DiscoverResponse, StatusResponse } from "../types";
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
@@ -17,10 +17,14 @@ const PRIMARY_BTN =
 
 export function SettingsPanel({
   status,
+  discover,
+  onReimport,
   onClose,
   onSaved,
 }: {
   status: StatusResponse | null;
+  discover?: DiscoverResponse | null;
+  onReimport?: () => void;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -123,6 +127,22 @@ export function SettingsPanel({
             <div className="mt-2 text-xs text-ink-dim animate-fade-in">{keyStatus}</div>
           )}
         </section>
+
+        {onReimport && (
+          <section className="mt-7">
+            <SectionTitle>Memory import</SectionTitle>
+            <div className="mt-2.5 space-y-2">
+              <p className="text-xs leading-relaxed text-ink-dim">
+                {discover?.bootstrapped
+                  ? "Coding-agent histories have been imported. Re-run to pick up anything new."
+                  : "Import your OpenCode / Claude Code / Cursor history into memory."}
+              </p>
+              <button onClick={onReimport} className={`w-full ${PRIMARY_BTN}`}>
+                {discover?.bootstrapped ? "Re-run import" : "Import now"}
+              </button>
+            </div>
+          </section>
+        )}
 
         <section className="mt-7">
           <SectionTitle>Hands</SectionTitle>

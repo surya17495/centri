@@ -171,10 +171,20 @@ function applyEvent(state: AggregateState, ev: CentriEvent, index: number): Aggr
   return state;
 }
 
+// Live bootstrap progress derived from ingest.bootstrap.* spine events, so the
+// onboarding card can show import progress without its own socket.
+export interface BootstrapProgress {
+  phase: "started" | "progress" | "completed";
+  imported: number;
+  sourceCount?: number;
+  lastSummary?: string;
+}
+
 export interface EventStream {
   connection: ConnectionState;
   timeline: TimelineItem[];
   status: StatusResponse | null;
+  bootstrap: BootstrapProgress | null;
   refreshStatus: () => void;
   resolveApproval: (approvalId: string, decision: "approve" | "reject") => Promise<void>;
 }
@@ -188,10 +198,33 @@ function inThread(ev: CentriEvent, threadId: string | null): boolean {
   return evThread === null || evThread === threadId;
 }
 
+function bootstrapFromEvent(ev: CentriEvent): BootstrapProgress | null {
+  const type = ev.type || "";
+  if (!type.startsWith("ingest.bootstrap.")) return null;
+  const payload = (ev.payload ?? {}) as Record<string, unknown>;
+  const summary = ev.summary ?? (payload.summary as string) ?? "";
+  if (type === "ingest.bootstrap.started") {
+    return { phase: "started", imported: 0, sourceCount: payload.source_count as number, lastSummary: summary };
+  }
+  if (type === "ingest.bootstrap.progress") {
+    return { phase: "progress", imported: (payload.ingested as number) ?? 0, lastSummary: summary };
+  }
+  if (type === "ingest.bootstrap.completed") {
+    return {
+      phase: "completed",
+      imported: (payload.imported as number) ?? 0,
+      sourceCount: payload.source_count as number,
+      lastSummary: summary,
+    };
+  }
+  return null;
+}
+
 export function useEventStream(threadId: string | null = null): EventStream {
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [version, setVersion] = useState(0);
   const [status, setStatus] = useState<StatusResponse | null>(null);
+  const [bootstrap, setBootstrap] = useState<BootstrapProgress | null>(null);
 
   const stateRef = useRef<AggregateState>(emptyState());
   const counterRef = useRef(0);
@@ -206,6 +239,16 @@ export function useEventStream(threadId: string | null = null): EventStream {
 
   const ingest = useCallback(
     (ev: CentriEvent) => {
+      const bp = bootstrapFromEvent(ev);
+      if (bp) {
+        setBootstrap((prev) => {
+          if (bp.phase === "progress") {
+            const imported = (prev?.imported ?? 0) + bp.imported;
+            return { ...bp, imported };
+          }
+          return bp;
+        });
+      }
       if (!inThread(ev, threadRef.current)) return;
       applyEvent(stateRef.current, ev, counterRef.current++);
       bump();
@@ -366,5 +409,5 @@ export function useEventStream(threadId: string | null = null): EventStream {
     .map((k) => state.items.get(k))
     .filter((x): x is TimelineItem => Boolean(x));
 
-  return { connection, timeline, status, refreshStatus, resolveApproval };
+  return { connection, timeline, status, bootstrap, refreshStatus, resolveApproval };
 }

@@ -8,8 +8,8 @@ Owner: surya (surya.munna95@gmail.com). Repo: https://github.com/surya17495/cent
    of work). Pushed code is the only safe code; the session may die any time.
    Git identity: `-c user.name="surya17495" -c user.email="surya.munna95@gmail.com"`.
 2. **Quality gates before every push:** `cd core && python -m pytest tests/ -q`
-   (currently 112 passed) and, if `shell/` was touched,
-   `cd shell && npx tsc --noEmit && npx vitest run && npx vite build` (9 tests).
+   (currently 172 passed) and, if `shell/` was touched,
+   `cd shell && npm run typecheck && npm run test && npm run build` (14 tests).
 3. **Be honest** in README/docs/reports about sandbox-verified vs
    needs-local-build (Tauri binary, real opencode binary, systemd/Caddy on a VM).
    Never claim something is tested when it isn't. The owner checks.
@@ -127,6 +127,33 @@ Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
       only* — real Claude Code / Cursor on-disk data verification stays on the
       real-machine list (their schemas vary across releases; the readers are built
       tolerant but only proven against fixtures). pytest 150/150.
+- [x] **3b.5 Onboarding + single LLM config** — DONE (2026-06-12). Three units.
+      (1) **Decisions** — ratified north star ("OpenCode with photographic
+      memory") + single-LLM-config in `docs/ROADMAP.md` / above. (2) **Backend
+      single-config seam:** `centri.opencode_config.OpenCodeConfig` reads
+      OpenCode's local config/auth read-only + schema-tolerant
+      (`~/.config/opencode`, `~/.local/share/opencode`, `auth.json`/`opencode.json`),
+      surfaces *configured providers* (`has_key` only — key material never
+      returned to callers/events) in `GET /ingest/discover` + dedicated
+      `GET /providers/discovered`; `ModelRouter` resolves a provider key from
+      OpenCode auth as fallback when `CENTRI_*` env keys are absent (env wins,
+      honest `None` when neither). `centri.models_catalog.ModelsCatalog` fetches
+      models.dev with on-disk cache + TTL, honest-unavailable offline
+      (`GET /models/catalog`); catalog-only, LiteLLM stays the transport — no
+      hard dependency. `centri.ingest.GenericIngestor` is a config-driven
+      fallback adapter (JSONL + SQLite chat tables, configurable fields) reusing
+      the registry HWM/idempotency/redaction; adapter contract documented in
+      `docs/ingestion-adapters.md`. (3) **Shell first-run onboarding:**
+      `/ingest/discover` now carries a backend-derived `bootstrapped` flag
+      (`db.has_ingest_state()` — NOT client localStorage); `OnboardingCard`
+      shows "Found N OpenCode messages, M Claude Code…" with one-click import
+      (`POST /ingest/bootstrap`), live progress from `ingest.bootstrap.*` spine
+      events (no second socket), skip/dismiss, and a Settings "Memory import"
+      re-run path. **Honesty:** OpenCode auth/config formats are *fixture-verified
+      only* (schemas vary across releases; readers built tolerant). Tests:
+      `test_opencode_config.py` (8), `test_models_catalog.py` (5),
+      `test_ingest_generic.py` (6), `test_centri.py::TestSingleLlmConfig` (3),
+      `OnboardingCard.test.tsx` (5). pytest 172/172, vitest 14/14, tsc/build clean.
 - [ ] **3d.1 Open-loop scheduler** — scheduler tick scans open loops, emits
       one-time `loop.nudge` events per policy window; surfaces in `/briefing`.
 - [ ] **3c.1 Tiered consolidation** — daily/weekly digests + entity pages;
@@ -135,7 +162,7 @@ Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
       unprompted-recall / supersession-churn / cold-start / delegated-work
       scenarios; wire as regression gate.
 
-## State of the world (2026-06-11)
+## State of the world (2026-06-12)
 
 - **Done & pushed:** Phases 0–2 (event spine, ACP+OpenCode hands, memory graph
   w/ typed supersession, consolidation worker, cue-driven briefs, centri-bench
@@ -143,15 +170,19 @@ Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
   (`6e4bb2c`), 3b.1 full hand transcripts, 3b.2 threads (chat-scoped timeline,
   global memory), 3b.3 OpenCode ingestion adapter, 3b.4 memory bootstrap
   (ingest adapter registry + Claude Code/Cursor adapters + discovery +
-  one-shot import). Decisions ratified (shared-core continuity, OpenCode-via-ACP
-  default, deterministic memory) — see `docs/ROADMAP.md` → "Decisions".
-  pytest 150/150, vitest 9/9, tsc/build clean.
+  one-shot import), 3b.5 onboarding + single LLM config (OpenCode provider
+  reuse + models.dev catalog + generic adapter + first-run import card).
+  Decisions ratified (shared-core continuity, OpenCode-via-ACP default,
+  deterministic memory, north star, single-LLM-config) — see
+  `docs/ROADMAP.md` → "Decisions". pytest 172/172, vitest 14/14, tsc/build clean.
 - **Next:** 3d.1 open-loop scheduler (per the work queue order below).
 - **Layout:** `core/` Python FastAPI (src/centri/: app.py, db.py, coordinator,
-  consolidation, memory_graph, memory_brief, briefing, hands/, ingest/ [base +
-  registry + opencode/claude_code/cursor adapters], bench/);
-  `shell/` React+TS+Tailwind (+ Tauri scaffold); `deploy/` VM bundle;
-  `docs/` architecture/roadmap/memory/bench/event-contract.
+  consolidation, memory_graph, memory_brief, briefing, opencode_config,
+  models_catalog, model_router, hands/, ingest/ [base + registry +
+  opencode/claude_code/cursor/generic adapters], bench/);
+  `shell/` React+TS+Tailwind (+ Tauri scaffold; components/OnboardingCard);
+  `deploy/` VM bundle; `docs/` architecture/roadmap/memory/bench/event-contract/
+  ingestion-adapters.
 - **Run locally (sandbox):** backend
   `env LITELLM_BASE_URL=http://127.0.0.1:4999/v1 LITELLM_API_KEY=test-proxy-key CENTRI_AUTONOMY_LEVEL=supervised python -m uvicorn centri.app:app --host 127.0.0.1 --port 8787`
   from `core/` (fake proxy URL → all role models report configured; supervised →

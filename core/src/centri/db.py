@@ -335,6 +335,16 @@ class Database:
         state = await self.get_ingest_state(source)
         return state["high_water"] if state else ""
 
+    async def has_ingest_state(self) -> bool:
+        """True if any source has ever been ingested (i.e. bootstrap has run).
+
+        The first-run onboarding flag derives from this — a backend fact, not
+        client localStorage — so a re-install / new client still knows whether
+        memory has been seeded from the user's coding-agent histories.
+        """
+        cur = await self._execute("SELECT 1 FROM ingest_state LIMIT 1")
+        return cur.fetchone() is not None
+
     async def set_ingest_high_water(
         self,
         source: str,

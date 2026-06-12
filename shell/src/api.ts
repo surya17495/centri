@@ -1,4 +1,10 @@
-import type { StatusResponse, Thread, UtteranceResponse } from "./types";
+import type {
+  BootstrapResult,
+  DiscoverResponse,
+  StatusResponse,
+  Thread,
+  UtteranceResponse,
+} from "./types";
 
 const STORAGE_KEY = "centri.backendUrl";
 const TOKEN_KEY = "centri.authToken";
@@ -98,6 +104,14 @@ export const api = {
     req<{ events: unknown[] }>(
       `/events?limit=${limit}${threadId ? `&thread_id=${encodeURIComponent(threadId)}` : ""}`,
     ),
+
+  discover: () => req<DiscoverResponse>("/ingest/discover"),
+
+  bootstrap: () =>
+    req<BootstrapResult>("/ingest/bootstrap", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
 
   connectAccount: (provider: string, apiKey: string) =>
     req<Record<string, unknown>>(`/accounts/${provider}/connect`, {

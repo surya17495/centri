@@ -65,6 +65,31 @@ export interface UtteranceResponse {
 
 export type ConnectionState = "connecting" | "online" | "offline";
 
+// GET /ingest/discover — what coding-agent histories CENTRI can import.
+export interface DiscoveredSource {
+  agent: string;
+  path: string;
+  available: boolean;
+  source?: string;
+  count?: number;
+  reason?: string;
+}
+
+export interface DiscoverResponse {
+  sources: DiscoveredSource[];
+  available_count: number;
+  total_messages: number;
+  agents: string[];
+  // First-run flag derived from the backend (has any source been ingested?).
+  bootstrapped?: boolean;
+  opencode_providers?: { provider: string; has_key: boolean }[];
+}
+
+export interface BootstrapResult {
+  imported: number;
+  source_count: number;
+}
+
 // A task card aggregated from the event stream.
 export interface TaskCard {
   taskId: string;
