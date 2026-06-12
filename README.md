@@ -165,6 +165,43 @@ in the sandbox — namely Rust/cargo for the Tauri desktop binary).
   global-shortcut stub) but `cargo`/Rust is not available in the sandbox, so
   `npm run tauri build` must be run on a machine with the Rust toolchain. See
   [`shell/README.md`](shell/README.md).
+- **Sandbox-verified (Phase 4 tools slice, Decision 11):** a first-class **Tool
+  contract** (`tools/base.py`) parallel to the Hand contract — `ToolProvider`
+  (available / list / execute), `ToolSpec`, `ToolResult`, and a `ToolRegistry` whose
+  `invoke()` is the single execution path: it emits `tool.requested` →
+  (approval gate for side-effectful slugs) → `tool.completed`/`failed`/`denied` on the
+  append-only spine, folds a `fact` hint from completed read-only results into the
+  memory graph, and classifies SEARCH/GET/LIST/FETCH/READ/FIND/LOOKUP/QUERY slugs as
+  read-only (gate skipped). **Composio** is the first provider (`tools/composio.py`)
+  with **Tavily search** (`TAVILY_SEARCH`) as the demo tool. Surfaced at `GET /tools`
+  and `POST /tools/invoke`. Covered by `test_tools.py` (13), `test_tools_composio.py`
+  (13, fully mocked `httpx.MockTransport` — no network), and `test_centri.py::TestTools`
+  (5: endpoint shapes, invoke with a fake provider, auth enforced, unavailable reason
+  surfaced). **Honest-unavailable:** with no `CENTRI_COMPOSIO_API_KEY` the provider
+  reports unavailable-with-reason and never touches the network or fakes success; the
+  Composio HTTP seam is verified against a mocked transport, so a live call needs a real
+  key. Config (all optional, env-driven):
+
+  | Env var | Default | Purpose |
+  |---------|---------|---------|
+  | `CENTRI_COMPOSIO_API_KEY` (or `COMPOSIO_API_KEY`) | _(empty)_ | Composio API key; empty → honest-unavailable |
+  | `CENTRI_COMPOSIO_BASE_URL` | `https://backend.composio.dev/api/v3` | Composio API base |
+  | `CENTRI_COMPOSIO_USER_ID` | `default` | Composio connected-account user id |
+  | `CENTRI_COMPOSIO_TOOLS` | `TAVILY_SEARCH` | comma-separated allowlist of tool slugs |
+
+  Live Tavily search through Composio for the demo:
+
+  ```bash
+  export CENTRI_COMPOSIO_API_KEY=ak_your_key_here   # required for a real call
+  export CENTRI_COMPOSIO_TOOLS=TAVILY_SEARCH
+  # (optional) export CENTRI_COMPOSIO_USER_ID=your_connected_account_user_id
+  # start the core: uvicorn centri.app:app  (add -H "Authorization: Bearer $CENTRI_AUTH_TOKEN" below if auth is set)
+
+  curl -s http://127.0.0.1:8000/tools | jq            # TAVILY_SEARCH should show available:true
+  curl -s -X POST http://127.0.0.1:8000/tools/invoke \
+    -H 'content-type: application/json' \
+    -d '{"name": "TAVILY_SEARCH", "arguments": {"query": "latest on agentic AI"}}' | jq
+  ```
 - **Honest-unavailable:** voice endpoints (Phase 3); Letta semantic memory unless
   `CENTRI_LETTA_URL` is configured. These report unavailable-with-reason rather than
   faking success.

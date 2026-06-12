@@ -514,7 +514,16 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
             HTTP error → failed, successful=false → failed, transport error →
             failed, off-allowlist rejected, schema-tolerant missing fields,
             from_settings. pytest 360/361 (1 skip).
-      - [ ] **Step 3 — API + coordinator wiring** (`GET /tools`, `POST /tools/invoke`).
+      - [x] **Step 3 — API + coordinator wiring** — DONE (2026-06-12).
+            `runtime.py` boots a `ToolRegistry` + registers `ComposioToolProvider`
+            (`from_settings`) as `runtime.tool_registry` after Jobs. `app.py` adds
+            `GET /tools` (`{available, tools[]}` each with availability+reason) and
+            `POST /tools/invoke` (`ToolInvokeRequest{name, arguments, thread_id}`,
+            gate = `jobs._await_approval(None, thread_id, payload)`, returns
+            `{available, result, event_ids}`). Tests: `test_centri.py::TestTools`
+            (5) + README "Phase 4 tools slice" docs in the same commit. Coordinator
+            intent routing was the cuttable item and is **not** wired (endpoints are
+            the kept requirement). pytest 365 passed / 1 skipped.
 - [ ] **3d.1 Waking-up + spontaneous association** — the "feels human"
       proactivity track on 3c.0's machinery: waking-up situating brief on first
       interaction of a session/day, spontaneous association surfacing an
@@ -636,8 +645,16 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
   `x-api-key` via async httpx (transport injectable for fully-mocked tests, no new
   deps), schema-tolerant `data`/`successful`/`error` parse, honest-unavailable
   without a key (`composio:unavailable:no-api-key`, never executes), key only in
-  the request header. `test_tools_composio.py` (13, no network). REST endpoints
-  (Step 3) next. pytest 360/361 (1 skip).
+  the request header. `test_tools_composio.py` (13, no network).
+  **Step 3 DONE:** `runtime.py` boots `ToolRegistry` + registers
+  `ComposioToolProvider` (`runtime.tool_registry`). `app.py` adds `GET /tools`
+  (lists each provider tool with availability+reason) and `POST /tools/invoke`
+  (gate reuses `jobs._await_approval`, returns `{available, result, event_ids}`),
+  both behind the standard bearer auth. README "Phase 4 tools slice" documents the
+  contract, env config, and a live `TAVILY_SEARCH` curl. Coordinator intent routing
+  was the explicitly cuttable item and is **not** wired — the REST endpoints are.
+  New contract: `GET /tools` + `POST /tools/invoke` surface the registry honestly
+  (no key → available:false with reason, never faked). pytest 365/366 (1 skip).
 - **North star v2 (Decision 14, ratified 2026-06-11 PT):** CENTRI is a
   **reasoning partner** — conversational seamlessness first-class, thinks like a
   human with machine superpowers (memory bandwidth, VM tool use, voice). Docs

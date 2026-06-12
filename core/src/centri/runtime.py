@@ -42,6 +42,7 @@ class Runtime:
         self.memory_brief: Any = None
         self.proactive_brief: Any = None
         self.temporal_narrator: Any = None
+        self.tool_registry: Any = None
         self._background_tasks: list[asyncio.Task] = []
 
     async def boot(self) -> None:
@@ -159,6 +160,14 @@ class Runtime:
 
         # 8. Jobs
         self.jobs = Jobs(self.db, self.hands, self.permissions, self.event_bus, memory=self.memory)
+
+        # 8b. Tool registry (Phase 4 / Decision 11). Always register the Composio
+        # provider — availability is honest (no key => unavailable with a reason),
+        # so registering it costs nothing and surfaces it at GET /tools regardless.
+        from centri.tools import ComposioToolProvider, ToolRegistry
+
+        self.tool_registry = ToolRegistry(self.db, event_bus=self.event_bus)
+        self.tool_registry.register(ComposioToolProvider.from_settings(settings))
 
         # 9. Scheduler (carries the consolidation worker + dormancy detection)
         self.scheduler = Scheduler(

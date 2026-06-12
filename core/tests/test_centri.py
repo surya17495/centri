@@ -529,3 +529,87 @@ class TestEmbeddingBackfill:
             assert body["available"] is False
             assert body["embedded"] == 0
             assert body["stamp"] == "embedding:unavailable"
+
+
+class TestTools:
+    """Phase 4 / Decision 11: GET /tools + POST /tools/invoke.
+
+    The Composio provider is always registered; without an API key (the test env)
+    it is honest-unavailable with a reason and never executes. A fake provider
+    injected into the booted registry exercises the real endpoint shapes.
+    """
+
+    async def test_tools_endpoint_lists_composio_honest_unavailable(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            body = client.get("/tools").json()
+            assert body["available"] is True
+            tavily = [t for t in body["tools"] if t["name"] == "TAVILY_SEARCH"]
+            assert tavily, "TAVILY_SEARCH should be in the default allowlist"
+            # No key in the test env => honest-unavailable reason surfaces.
+            assert tavily[0]["available"] is False
+            assert tavily[0]["reason"] == "composio:unavailable:no-api-key"
+            assert tavily[0]["provider"] == "composio"
+            assert tavily[0]["side_effectful"] is False  # SEARCH => read-only
+
+    async def test_invoke_unavailable_provider_surfaces_reason(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            body = client.post(
+                "/tools/invoke", json={"name": "TAVILY_SEARCH", "arguments": {"query": "x"}}
+            ).json()
+            assert body["available"] is True
+            assert body["result"]["status"] == "unavailable"
+            assert body["result"]["error"] == "composio:unavailable:no-api-key"
+            assert body["event_ids"]  # the trail was recorded
+
+    async def test_invoke_with_fake_read_only_provider(self):
+        from typing import Any, Dict, List
+        from fastapi.testclient import TestClient
+        from centri.app import app, runtime
+        from centri.tools import ToolProvider, ToolResult, ToolSpec
+
+        class _Fake(ToolProvider):
+            name = "faketool"
+
+            def available(self) -> bool:
+                return True
+
+            def unavailable_reason(self) -> str:
+                return ""
+
+            def list_tools(self) -> List[ToolSpec]:
+                return [ToolSpec(name="DEMO_SEARCH", provider=self.name, side_effectful=False)]
+
+            async def execute(self, name: str, arguments: Dict[str, Any], **kwargs: Any) -> ToolResult:
+                return ToolResult(status="completed", output={"echo": arguments})
+
+        with TestClient(app) as client:
+            runtime.tool_registry.register(_Fake())
+            body = client.post(
+                "/tools/invoke", json={"name": "DEMO_SEARCH", "arguments": {"q": "hi"}}
+            ).json()
+            assert body["result"]["status"] == "completed"
+            assert body["result"]["output"] == {"echo": {"q": "hi"}}
+            assert len(body["event_ids"]) == 2  # requested + completed
+
+    async def test_unknown_tool_is_honest_unavailable(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            body = client.post("/tools/invoke", json={"name": "NOPE_DOES_NOT_EXIST"}).json()
+            assert body["result"]["status"] == "unavailable"
+            assert "unknown tool" in body["result"]["error"]
+
+    async def test_tools_routes_require_auth_when_configured(self, monkeypatch):
+        import centri.config as config_module
+        monkeypatch.setattr(config_module, "_settings", Settings(auth_token="s3cret"))
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            assert client.get("/tools").status_code == 401
+            assert client.post("/tools/invoke", json={"name": "TAVILY_SEARCH"}).status_code == 401
+            ok = client.get("/tools", headers={"Authorization": "Bearer s3cret"})
+            assert ok.status_code == 200

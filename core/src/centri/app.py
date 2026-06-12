@@ -49,6 +49,12 @@ class BootstrapRequest(BaseModel):
     sources: list[dict] | None = None
 
 
+class ToolInvokeRequest(BaseModel):
+    name: str
+    arguments: dict | None = None
+    thread_id: str | None = None
+
+
 class ContextRequest(BaseModel):
     surface: str | None = None
     title: str | None = None
@@ -539,6 +545,46 @@ async def events_stream(websocket: WebSocket):
         pass
     finally:
         await runtime.event_bus.unsubscribe(q)
+
+
+@app.get("/tools")
+async def get_tools() -> Dict[str, Any]:
+    """List every registered tool with provider availability + honest reason (Phase 4).
+
+    A provider with no credentials still lists its tools, flagged
+    ``available=false`` with a reason (e.g. ``composio:unavailable:no-api-key``),
+    so a caller sees what would be possible once configured — never faked.
+    """
+    if runtime.tool_registry is None:
+        return {"available": False, "reason": "tool subsystem not booted", "tools": []}
+    return {"available": True, "tools": runtime.tool_registry.list_tools()}
+
+
+@app.post("/tools/invoke")
+async def invoke_tool(req: ToolInvokeRequest) -> Dict[str, Any]:
+    """Invoke a tool through the registry (the only execution path, Decision 11).
+
+    Read-only tools (e.g. TAVILY_SEARCH) run immediately. A side-effectful tool
+    surfaces an approval the same way a coding task does — the registry awaits the
+    shared approval gate (``Jobs._await_approval``), which creates an
+    ``approval.requested`` card and blocks until it is resolved via the existing
+    ``/approvals/{id}/approve|reject`` routes (or times out → deny). The full event
+    trail (tool.requested → tool.completed/failed/denied) lands on the spine.
+    """
+    if runtime.tool_registry is None:
+        return {"available": False, "reason": "tool subsystem not booted"}
+
+    async def _gate(payload: Dict[str, Any]) -> str:
+        # Reuse the same approval machinery hands use; thread_id carried for the card.
+        return await runtime.jobs._await_approval(None, req.thread_id, payload)
+
+    result = await runtime.tool_registry.invoke(
+        req.name,
+        req.arguments or {},
+        approval_gate=_gate,
+        thread_id=req.thread_id,
+    )
+    return {"available": True, **result}
 
 
 @app.get("/hands")
