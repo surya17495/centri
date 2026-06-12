@@ -8,19 +8,39 @@ import type {
 
 const STORAGE_KEY = "centri.backendUrl";
 const TOKEN_KEY = "centri.authToken";
-const DEFAULT_BACKEND = "http://127.0.0.1:8760";
+
+// When the shell is served over http(s) (e.g. the Docker web deployment on
+// :8761), the core is almost always the same host on :8760 — so default to
+// that instead of hardcoding 127.0.0.1, which points at the *viewer's*
+// machine, not the server. Tauri (tauri:// origin) falls back to localhost.
+function defaultBackend(): string {
+  try {
+    const { protocol, hostname } = window.location;
+    if (protocol === "http:" || protocol === "https:") {
+      return `http://${hostname}:8760`;
+    }
+  } catch {
+    /* non-browser environment (tests) */
+  }
+  return "http://127.0.0.1:8760";
+}
 
 export function getBackendUrl(): string {
   try {
-    return localStorage.getItem(STORAGE_KEY) || DEFAULT_BACKEND;
+    return localStorage.getItem(STORAGE_KEY) || defaultBackend();
   } catch {
-    return DEFAULT_BACKEND;
+    return defaultBackend();
   }
 }
 
 export function setBackendUrl(url: string): void {
   try {
-    localStorage.setItem(STORAGE_KEY, url.replace(/\/$/, ""));
+    const cleaned = url.trim().replace(/\/+$/, "");
+    if (cleaned) {
+      localStorage.setItem(STORAGE_KEY, cleaned);
+    } else {
+      localStorage.removeItem(STORAGE_KEY);
+    }
   } catch {
     /* ignore storage failures (private mode, etc.) */
   }

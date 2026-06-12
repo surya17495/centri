@@ -91,10 +91,16 @@ export function SettingsPanel({
     }
   }
 
+  const [backendStatus, setBackendStatus] = useState<string | null>(null);
+
   function saveBackend() {
     setBackendUrl(backend);
     setAuthToken(token.trim());
     onSaved();
+    // The WebSocket and any cached fetches still point at the old backend;
+    // a reload re-initializes everything against the new URL + token.
+    setBackendStatus("Saved — reconnecting…");
+    setTimeout(() => window.location.reload(), 400);
   }
 
   async function saveMemoryConfig() {
@@ -152,7 +158,12 @@ export function SettingsPanel({
         </div>
 
         <section className="mt-7">
-          <SectionTitle>Backend</SectionTitle>
+          <div className="flex items-center justify-between">
+            <SectionTitle>Backend</SectionTitle>
+            {backendStatus && (
+              <span className="text-[10px] text-ink-dim animate-fade-in">{backendStatus}</span>
+            )}
+          </div>
           <div className="mt-2.5 space-y-2">
             <input
               value={backend}

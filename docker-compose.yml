@@ -19,6 +19,9 @@ services:
       CENTRI_DB_PATH: "/data/state.db"
     volumes:
       - centri-data:/data
+      # Read-only view of the host's OpenCode history so the ingest adapter
+      # can tail opencode.db (path matches CENTRI_OPENCODE_INGEST_DB in .env).
+      - /home/ubuntu/.local/share/opencode:/home/ubuntu/.local/share/opencode:ro
     ports:
       - "8760:8760"
     restart: unless-stopped
