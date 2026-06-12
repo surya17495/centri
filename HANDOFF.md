@@ -52,6 +52,21 @@ Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
    keys win; OpenCode auth is fallback; honest-unavailable otherwise. models.dev
    is the UI model catalog (catalog only; LiteLLM is the Python transport). Key
    material never written/logged; redacted in events.
+6. **Context as cache.** State lives in the ledger/graph, never in conversation
+   buffers; per-turn context is assembled fresh by a pure, versioned curation
+   function. Window = cache, not storage. 3c bench metric = quality-per-token.
+7. **Deterministic curation.** `brief = curate(graph_snapshot, cue, budget,
+   policy_version)` — pure: no wall-clock, no randomness, no LLM at read time.
+   Every brief line has a score breakdown + `source_event_id` receipt. Optional
+   cue-expansion seam may EXPAND THE CUE only (never select facts); expansion
+   terms logged on the spine; deterministic fallback when unconfigured.
+8. **No visible remembering + ambient layer.** User never sees retrieval
+   mechanics; receipts on demand, invisible by default. Two brief layers:
+   (a) AMBIENT — small slow-changing standing context in every brief
+   (identity/conventions, active projects, top open loops, short recent-past
+   narrative), refreshed by consolidation, own small budget; (b) CUED — per-turn
+   ranked retrieval. Waking-up + spontaneous association = same machinery,
+   unprompted, queued into 3d.
 
 ## Work queue (do in order; each is one commit+push)
 

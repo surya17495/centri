@@ -46,6 +46,30 @@ below.
    display comes from **models.dev** (catalog only — LiteLLM remains the Python
    transport for actual calls). Key material is never written or logged; it is
    redacted in events.
+6. **Context as cache.** State lives in the ledger/graph, **never** in
+   conversation buffers. Per-turn context is assembled fresh by a pure, versioned
+   curation function — the window is a *cache*, not storage. The bench metric for
+   3c is **quality-per-token**: precision/recall of the facts a turn actually
+   needed, per token spent. This reframes 3c's thesis: *make the context window
+   obsolete as storage; curation, not accumulation.*
+7. **Deterministic curation.** `brief = curate(graph_snapshot, cue, budget,
+   policy_version)` is a **pure function** — no wall-clock, no randomness, no LLM
+   at read time. Every brief line carries a score breakdown **and** a
+   `source_event_id` receipt. The one exception is an optional **cue-expansion**
+   seam: an LLM may rewrite an oblique ask into extra *query terms* — it may only
+   EXPAND THE CUE, never select facts. Expansion terms are logged on the spine;
+   the deterministic builder is the fallback when the seam is unconfigured.
+8. **No visible remembering + ambient layer.** Memory must feel human: the user
+   never sees retrieval mechanics ("searching memory…", "found 3 facts").
+   Receipts are available on demand, invisible by default. Briefs have two
+   layers: **(a) ambient** — small, slow-changing standing context present in
+   *every* brief (identity/conventions, active projects, top open loops, a short
+   narrative of the recent past), refreshed by consolidation, within its own
+   ~few-hundred-token budget; **(b) cued** — per-turn ranked retrieval. The
+   "feels human" *unprompted* moments — waking-up situating ("while you were
+   away…") and spontaneous association (surfacing an unusually-high-scoring past
+   item as an aside) — run on this same machinery and are queued into 3d as the
+   proactivity track.
 
 ## Phase 0 — Foundation (this phase)
 
@@ -214,16 +238,35 @@ with tests and its own commit.
   data verification remains on the real-machine list (fixture-verified only). See
   `HANDOFF.md`.
 
-## Phase 3c — Retrieval at scale
+## Phase 3c — Context as cache (quality-per-token)
 
-Precision must survive 10^6 events; the read path must stay history-independent.
+**Thesis (Decisions 6–8):** make the context window obsolete *as storage* — the
+window is a cache; the metric is quality-per-token; curation must feel human.
+State lives in the ledger/graph and is assembled fresh per turn by a pure,
+versioned `curate()`. Precision must survive 10^6 events; the read path stays
+history-independent.
 
-- **3c.1 Tiered consolidation.** Daily → weekly digests; entity pages
-  (per-repo/project/host) maintained by supersession. Brief reads digests +
-  entity pages + ANN top-k, never scans the spine. Per Decision 3, the digest
-  summarizer may sit behind an optional LLM seam but **must** keep a
-  deterministic fallback and stay re-derivable from the ledger; the
-  consolidation loop itself takes no model call.
+- **3c.0 Deterministic context curation.** `curate(graph_snapshot, cue, budget,
+  policy_version)`: a deterministic **cue builder** (alias expansion, thread
+  anaphora, active-state signals, one graph hop), an **explicit-feature linear
+  ranker** (hard filters first — superseded/redacted never enter; features =
+  entity overlap, type prior, open-loop boost, thread affinity, recency as
+  tiebreak only) with per-item score breakdowns, a **knapsack budgeter** (full
+  text | one-line digest | dropped, by score; per-section floors) stamped with
+  `policy_version` + graph high-water mark, and an **ambient standing-context
+  layer** prepended to every brief. **Instrumentation:** `curation.miss` /
+  `curation.waste` counters emitted with receipts as the feedback loop for
+  replay tuning. The cue-expansion LLM seam is honest-unavailable (logged
+  expansion terms, deterministic fallback). Wired into the live
+  `build_delegation_brief()` path, not a side module. **Done (2026-06-12).**
+- **3c.1 Replay harness + quality-per-token bench + write-time embeddings.** A
+  replay harness drives recorded spines + cues through `curate()` and scores
+  quality-per-token against the `curation.miss`/`curation.waste` ledger; tiered
+  daily→weekly digests + entity pages maintained by supersession (digest
+  summarizer behind an optional LLM seam with a deterministic fallback, per
+  Decision 3); **write-time embeddings** stored on candidates so stored-vector
+  similarity slots into the ranker as pure arithmetic (the Cue/candidate
+  interfaces in 3c.0 are already shaped for it).
 - **3c.2 Temporal queries.** "What changed since X", "where did we leave off"
   answered from the digest hierarchy.
 - **3c.3 Aged-spine bench.** Synthetic 2-year/10^6-event spine; measure brief
@@ -231,10 +274,16 @@ Precision must survive 10^6 events; the read path must stay history-independent.
 
 ## Phase 3d — Proactivity
 
-- **3d.1 Open-loop scheduler.** Scheduler tick scans live open loops with
-  due/stale policies → emits `loop.nudge` events → surfaces in timeline +
-  `/briefing` (and notification seam later). Acceptance: a loop created by a
-  failed task nudges once after its policy window, never re-nudges unresolved.
+- **3d.1 Waking-up + spontaneous association (the "feels human" track).** The
+  unprompted half of Decision 8, running on 3c.0's curation machinery: a
+  **waking-up** situating brief on the first interaction of a session/day ("while
+  you were away…"), **spontaneous association** that surfaces an
+  unusually-high-scoring past item as an aside, and the **open-loop scheduler** —
+  scheduler tick scans live open loops with due/stale policies → emits
+  `loop.nudge` events → surfaces in timeline + `/briefing` (and notification seam
+  later). Acceptance: a loop created by a failed task nudges once after its
+  policy window, never re-nudges unresolved; situating fires once per dormancy
+  gap, not every turn.
 - **3d.2 Watchers.** Long-running hand tasks report terminal state into the
   loop graph; completion closes the loop and produces a brief line.
 
