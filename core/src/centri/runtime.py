@@ -40,6 +40,7 @@ class Runtime:
         self.models_catalog: Any = None
         self.memory_brief: Any = None
         self.proactive_brief: Any = None
+        self.temporal_narrator: Any = None
         self._background_tasks: list[asyncio.Task] = []
 
     async def boot(self) -> None:
@@ -63,6 +64,7 @@ class Runtime:
         from centri.consolidation import Consolidator
         from centri.ingest import IngestConfig, IngestRegistry
         from centri.memory_brief import MemoryBriefAssembler, ProactiveBriefBuilder
+        from centri.temporal import TemporalNarrator
         from centri.curation import Curator
         from centri.models_catalog import ModelsCatalog
         from centri.opencode_config import OpenCodeConfig
@@ -127,6 +129,9 @@ class Runtime:
         self.models_catalog = ModelsCatalog()
         self.memory_brief = MemoryBriefAssembler(self.memory_graph)
         self.proactive_brief = ProactiveBriefBuilder(self.db, self.memory_graph)
+        # 3c.2 temporal narrative — "what changed since X" / "where did we leave off".
+        # A pure derived view over the spine + bi-temporal graph (Decision 13).
+        self.temporal_narrator = TemporalNarrator(self.memory_graph, self.db)
         # 3c.0 deterministic context curation — the live brief path. Model
         # router is attached after it is constructed (below) for the
         # honest-unavailable cue-expansion seam.

@@ -305,6 +305,33 @@ async def get_memory_graph() -> Dict[str, Any]:
     }
 
 
+@app.get("/memory/since")
+async def get_changed_since(since: str = "", repo_id: str | None = None) -> Dict[str, Any]:
+    """Temporal narrative (3c.2): "what changed since X".
+
+    ``since`` accepts an ISO date (``2026-06-10``), a full ISO timestamp, the literal
+    ``last-session`` (anchor at the most recent idle gap on the spine), or empty
+    (origin — everything so far). A derived, receipt-bearing view over the lossless
+    spine + bi-temporal graph; pure given the resolved anchor.
+    """
+    if runtime.temporal_narrator is None:
+        return {"available": False, "reason": "memory system not booted"}
+    resolved = await runtime.temporal_narrator.resolve_anchor(since)
+    nar = await runtime.temporal_narrator.changed_since(
+        resolved["anchor"], repo_id=repo_id, anchor_kind=resolved["kind"]
+    )
+    return {"available": True, **nar.as_dict()}
+
+
+@app.get("/memory/where-left-off")
+async def get_where_left_off(repo_id: str | None = None) -> Dict[str, Any]:
+    """Temporal narrative (3c.2): "where did we leave off" — the resume view."""
+    if runtime.temporal_narrator is None:
+        return {"available": False, "reason": "memory system not booted"}
+    nar = await runtime.temporal_narrator.where_left_off(repo_id=repo_id)
+    return {"available": True, **nar.as_dict()}
+
+
 @app.get("/threads")
 async def get_threads() -> Dict[str, Any]:
     threads = await runtime.db.list_threads()

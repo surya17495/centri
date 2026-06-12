@@ -199,6 +199,43 @@ class TestThreads:
             assert created["id"] in ids
 
 
+class TestTemporal:
+    """Phase 3c.2: temporal-narrative endpoints (derived view, receipts)."""
+
+    async def test_changed_since_endpoint_shape(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            # Origin anchor narrates everything; shape is stable regardless of data.
+            r = client.get("/memory/since", params={"since": ""}).json()
+            assert r["available"] is True
+            assert r["query"] == "changed_since"
+            assert r["anchor_kind"] == "origin"
+            assert isinstance(r["lines"], list)
+            assert "text" in r
+
+    async def test_changed_since_resolves_bare_date(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            r = client.get("/memory/since", params={"since": "2026-06-10"}).json()
+            assert r["available"] is True
+            assert r["anchor"] == "2026-06-10T00:00:00+00:00"
+            assert r["anchor_kind"] == "iso"
+
+    async def test_where_left_off_endpoint_shape(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            client.post("/utterance", json={"text": "resume here", "user_id": "t"})
+            r = client.get("/memory/where-left-off").json()
+            assert r["available"] is True
+            assert r["query"] == "where_left_off"
+            assert r["text"].startswith("Where we left off:")
+            # Every narrated line carries a receipt back to the spine.
+            assert all(ln["receipt"] for ln in r["lines"])
+
+
 class TestIngest:
     """Phase 3b.3: POST /ingest/opencode tails an external opencode.db once,
     idempotently, into the spine."""

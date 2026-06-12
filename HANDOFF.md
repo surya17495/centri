@@ -448,8 +448,14 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
       ISO date / full ISO / `last-session` (idle-gap scan on the spine) / origin.
       **Purity:** ISO sorts lexically so the diff is pure string compare — no
       `now()`, no calendar lib, no LLM; same `(graph, anchor)` → byte-identical
-      render. Slices 2–3 (endpoint wiring + chat-intent routing) pending. Tests:
-      `test_temporal.py` (16).
+      render. **Slice 2 DONE (2026-06-12):** wired into `runtime`
+      (`runtime.temporal_narrator`, None pre-boot like `proactive_brief`) and two
+      read-only endpoints — `GET /memory/since?since=<iso|date|last-session|>`
+      (resolves the anchor then narrates) and `GET /memory/where-left-off`. Both
+      stay unscoped like `/memory/graph` (one memory across threads), accept an
+      optional `repo_id`, return `{available, query, anchor, anchor_kind, lines,
+      text}`. Slice 3 (chat-intent routing) pending. Tests: `test_temporal.py`
+      (16), `test_centri.py::TestTemporal` (3).
 - [ ] **3d.1 Waking-up + spontaneous association** — the "feels human"
       proactivity track on 3c.0's machinery: waking-up situating brief on first
       interaction of a session/day, spontaneous association surfacing an
