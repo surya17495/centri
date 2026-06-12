@@ -124,6 +124,19 @@ class Settings:
     embedding_local_model: str = ""   # e.g. "BAAI/bge-small-en-v1.5" (fastembed)
     embedding_model: str = ""         # network model id for the LiteLLM route
 
+    # Composio tool provider (Phase 4 / Decision 11). BYOK: with no API key the
+    # provider is honest-unavailable (reason composio:unavailable:no-api-key) and
+    # NEVER fakes success. CENTRI_COMPOSIO_API_KEY wins; COMPOSIO_API_KEY is the
+    # fallback (the slug the Composio docs use). CENTRI_COMPOSIO_TOOLS is a
+    # comma-separated allowlist of tool slugs to expose; slugs containing
+    # SEARCH/GET/LIST/FETCH are read-only, everything else is side_effectful (so a
+    # web search runs without an approval gate, an action does not). Key material
+    # is never logged or written to events.
+    composio_api_key: str = ""
+    composio_base_url: str = "https://backend.composio.dev/api/v3"
+    composio_user_id: str = "default"
+    composio_tools: str = "TAVILY_SEARCH"
+
     # LLM consolidation tier (Increment 3). A SECOND consolidation tier processes
     # only events with NO deterministic synthesis hint (raw stdout, transcripts):
     # the LLM proposes typed ops, a deterministic gatekeeper applies/rejects them
@@ -223,6 +236,10 @@ class Settings:
             embedding_model=os.getenv("CENTRI_EMBEDDING_MODEL", ""),
             enabled_hands=enabled_hands,
             hand_priority=hand_priority,
+            composio_api_key=os.getenv("CENTRI_COMPOSIO_API_KEY", "") or os.getenv("COMPOSIO_API_KEY", ""),
+            composio_base_url=os.getenv("CENTRI_COMPOSIO_BASE_URL", "https://backend.composio.dev/api/v3"),
+            composio_user_id=os.getenv("CENTRI_COMPOSIO_USER_ID", "default"),
+            composio_tools=os.getenv("CENTRI_COMPOSIO_TOOLS", "TAVILY_SEARCH"),
             consolidation_base_url=os.getenv("CENTRI_CONSOLIDATION_BASE_URL", ""),
             consolidation_api_key=os.getenv("CENTRI_CONSOLIDATION_API_KEY", ""),
             consolidation_model=os.getenv("CENTRI_CONSOLIDATION_MODEL", ""),

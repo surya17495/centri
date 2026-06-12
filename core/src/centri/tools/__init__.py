@@ -15,11 +15,14 @@ from centri.tools.base import (
     ToolSpec,
     is_read_only_slug,
 )
+from centri.tools.composio import ComposioToolProvider, parse_tool_allowlist
 
 __all__ = [
+    "ComposioToolProvider",
     "ToolProvider",
     "ToolRegistry",
     "ToolResult",
     "ToolSpec",
     "is_read_only_slug",
+    "parse_tool_allowlist",
 ]

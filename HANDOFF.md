@@ -493,7 +493,27 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
             blocks execution, allow executes, provider failure => tool.failed, fact
             hint folds into graph w/ receipt, failed invocation writes no fact,
             secret in output redacted before persistence). pytest 347/348 (1 skip).
-      - [ ] **Step 2 — Composio provider** (`tools/composio.py`, mocked-HTTP tests).
+      - [x] **Step 2 — Composio provider** — DONE (2026-06-12).
+            `tools/composio.py` `ComposioToolProvider(ToolProvider)`. Config via
+            `centri/config.py`: `CENTRI_COMPOSIO_API_KEY` (fallback
+            `COMPOSIO_API_KEY`), `CENTRI_COMPOSIO_BASE_URL`
+            (default `https://backend.composio.dev/api/v3`),
+            `CENTRI_COMPOSIO_USER_ID` (default `default`), `CENTRI_COMPOSIO_TOOLS`
+            (comma allowlist, default `TAVILY_SEARCH`). Specs are built from the
+            allowlist (no network); SEARCH/GET/LIST/FETCH slugs → read-only, else
+            side_effectful. Execute = `POST {base}/tools/execute/{slug}` with header
+            `x-api-key` + JSON `{arguments, user_id}` via async httpx (a core dep,
+            no new deps; transport injectable for tests). Schema-tolerant parse of
+            `data`/`successful`/`error`: HTTP≥400 or `successful=false` → honest
+            `failed`; no key → `unavailable` (`composio:unavailable:no-api-key`,
+            never executes). Key material only ever in the `x-api-key` header,
+            never logged or in an event. Tests: `test_tools_composio.py` (13,
+            fully mocked httpx.MockTransport — no network): availability, no-key
+            never executes, allowlist parse, read-only vs side-effect, execute
+            success → completed (verifies slug-in-path / key-in-header / body),
+            HTTP error → failed, successful=false → failed, transport error →
+            failed, off-allowlist rejected, schema-tolerant missing fields,
+            from_settings. pytest 360/361 (1 skip).
       - [ ] **Step 3 — API + coordinator wiring** (`GET /tools`, `POST /tools/invoke`).
 - [ ] **3d.1 Waking-up + spontaneous association** — the "feels human"
       proactivity track on 3c.0's machinery: waking-up situating brief on first
@@ -610,8 +630,14 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
   `hand.transcript`. Read-only slugs (SEARCH/GET/LIST/FETCH/…) skip the gate;
   everything else is conservatively side-effectful. Honest-unavailable throughout
   (zero providers, unknown tool, no-key provider — never faked). New contract: tool
-  events on the spine, approval-gated side effects, fact-hint folding. Composio
-  provider (Step 2) + REST endpoints (Step 3) next. pytest 347/348 (1 skip).
+  events on the spine, approval-gated side effects, fact-hint folding.
+  **Step 2 DONE:** `tools/composio.py` `ComposioToolProvider` — config-driven
+  allowlist (default `TAVILY_SEARCH`), `POST {base}/tools/execute/{slug}` with
+  `x-api-key` via async httpx (transport injectable for fully-mocked tests, no new
+  deps), schema-tolerant `data`/`successful`/`error` parse, honest-unavailable
+  without a key (`composio:unavailable:no-api-key`, never executes), key only in
+  the request header. `test_tools_composio.py` (13, no network). REST endpoints
+  (Step 3) next. pytest 360/361 (1 skip).
 - **North star v2 (Decision 14, ratified 2026-06-11 PT):** CENTRI is a
   **reasoning partner** — conversational seamlessness first-class, thinks like a
   human with machine superpowers (memory bandwidth, VM tool use, voice). Docs
