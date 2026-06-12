@@ -135,9 +135,81 @@ def _tokens(text: str) -> List[str]:
     ]
 
 
-def _est_tokens(text: str) -> int:
-    """Deterministic token estimate — word count, no tokenizer dependency."""
-    return len(re.findall(r"\S+", text or ""))
+# ---------------------------------------------------------------------------
+# Token counting (deterministic, pinned, swappable)
+# ---------------------------------------------------------------------------
+# The budgeter measures every item in *real* tokens, not a word-count proxy.
+# Counting is deterministic and the active counter's identity is stamped into
+# the brief: changing the tokenizer changes the stamp, so a re-pinned golden is
+# a deliberate act, never silent drift. The interface lets a per-hand/per-model
+# tokenizer be configured later; the default is a pinned tiktoken encoding, and
+# the only honest fallback (word count) is recorded in the stamp when tiktoken
+# is unavailable at runtime.
+
+# Pinned encoding for the default counter. This is part of the curation policy —
+# bumping it must also bump the brief stamp.
+DEFAULT_ENCODING = "o200k_base"
+
+
+class TokenCounter:
+    """Deterministic token counter behind a small interface.
+
+    ``stamp`` is the tokenizer identity recorded on every brief (e.g.
+    ``tiktoken:o200k_base``); ``count(text)`` returns the token count.
+    """
+
+    stamp: str = "abstract"
+
+    def count(self, text: str) -> int:  # pragma: no cover - interface
+        raise NotImplementedError
+
+
+class WordCountCounter(TokenCounter):
+    """Honest fallback: whitespace word count. Used only when tiktoken is
+    unavailable at runtime; its presence is visible in the brief stamp so the
+    degraded path is never silent."""
+
+    stamp = "wordcount:v1"
+
+    def count(self, text: str) -> int:
+        return len(re.findall(r"\S+", text or ""))
+
+
+class TiktokenCounter(TokenCounter):
+    """Real token counts from a PINNED tiktoken encoding (default policy).
+
+    The encoding name is baked into ``stamp`` so the tokenizer version is part
+    of the policy identity. Construction raises if tiktoken / the encoding is
+    unavailable so the resolver can fall back honestly.
+    """
+
+    def __init__(self, encoding: str = DEFAULT_ENCODING):
+        import tiktoken  # raises ImportError when unavailable
+
+        self._enc = tiktoken.get_encoding(encoding)
+        self._encoding = encoding
+        self.stamp = f"tiktoken:{encoding}"
+
+    def count(self, text: str) -> int:
+        return len(self._enc.encode(text or ""))
+
+
+_DEFAULT_COUNTER: Optional[TokenCounter] = None
+
+
+def default_token_counter() -> TokenCounter:
+    """The process-wide default counter: pinned tiktoken, word-count fallback.
+
+    Cached so the encoding is loaded once. The chosen counter's ``stamp`` is
+    what lands on the brief, so callers never need to know which path won.
+    """
+    global _DEFAULT_COUNTER
+    if _DEFAULT_COUNTER is None:
+        try:
+            _DEFAULT_COUNTER = TiktokenCounter()
+        except Exception:  # tiktoken missing or encoding unavailable
+            _DEFAULT_COUNTER = WordCountCounter()
+    return _DEFAULT_COUNTER
 
 
 # ---------------------------------------------------------------------------
@@ -442,8 +514,9 @@ class Budgeter:
     reserve a minimum so decisions never get starved by a flood of facts.
     """
 
-    def __init__(self, budget: Optional[Budget] = None):
+    def __init__(self, budget: Optional[Budget] = None, counter: Optional[TokenCounter] = None):
         self._b = budget or Budget()
+        self._counter = counter or default_token_counter()
 
     def select(self, ranked: Sequence[ScoredCandidate]) -> List[BriefLine]:
         remaining = self._b.total
@@ -456,9 +529,9 @@ class Budgeter:
         for sc in ranked:
             section = _section_of(sc.candidate.item_type)
             full = _render_item(sc.candidate, "full")
-            full_cost = _est_tokens(full)
+            full_cost = self._counter.count(full)
             digest = _render_item(sc.candidate, "digest")
-            digest_cost = _est_tokens(digest)
+            digest_cost = self._counter.count(digest)
 
             floor = reserved.get(section, 0)
             avail = remaining + floor  # this section may dip into its reservation
@@ -612,7 +685,8 @@ class Ambient:
     def is_empty(self) -> bool:
         return not (self.identity or self.active_projects or self.open_loops or self.narrative)
 
-    def render(self, budget: int) -> str:
+    def render(self, budget: int, counter: Optional[TokenCounter] = None) -> str:
+        counter = counter or default_token_counter()
         lines: List[str] = []
         if self.identity:
             lines.append("Who/conventions: " + "; ".join(self.identity))
@@ -623,10 +697,14 @@ class Ambient:
         if self.narrative:
             lines.append(self.narrative)
         block = "\n".join(lines)
-        # Trim to budget deterministically (whole words).
-        if _est_tokens(block) > budget:
-            words = re.findall(r"\S+", block)[:budget]
-            block = " ".join(words) + "…"
+        # Trim to budget deterministically: drop whole words from the end until
+        # the real token count fits. Word boundaries keep the trim readable while
+        # the counter (not the word count) decides when we are under budget.
+        if counter.count(block) > budget:
+            words = re.findall(r"\S+", block)
+            while words and counter.count(" ".join(words) + "…") > budget:
+                words.pop()
+            block = (" ".join(words) + "…") if words else ""
         return block
 
 
@@ -661,16 +739,26 @@ class CuratedBrief:
     ambient: Ambient
     lines: List[BriefLine] = field(default_factory=list)
     cue: Optional[Cue] = None
+    # Tokenizer identity (e.g. ``tiktoken:o200k_base`` or ``wordcount:v1``). Part
+    # of the policy stamp: a tokenizer change changes this string, so a re-pinned
+    # golden is deliberate, never silent drift.
+    tokenizer_stamp: str = ""
 
     def is_empty(self) -> bool:
         return self.ambient.is_empty() and not self.lines
 
-    def render(self, *, with_receipts: bool = False, ambient_budget: int = 280) -> str:
+    def render(
+        self,
+        *,
+        with_receipts: bool = False,
+        ambient_budget: int = 280,
+        counter: Optional[TokenCounter] = None,
+    ) -> str:
         """Human-facing render. Receipts are invisible by default (Decision 8);
         ``with_receipts=True`` appends ``[source_event_id]`` for the on-demand
         explainability view."""
         out: List[str] = []
-        amb = self.ambient.render(ambient_budget)
+        amb = self.ambient.render(ambient_budget, counter)
         if amb:
             out.append(amb)
             out.append("")
@@ -729,21 +817,24 @@ async def curate(
     weights: Optional[RankWeights] = None,
     policy_version: str = POLICY_VERSION,
     repo_id: Optional[str] = None,
+    counter: Optional[TokenCounter] = None,
 ) -> CuratedBrief:
     """Pure, versioned curation: ``brief = curate(graph, cue, budget, version)``.
 
     No wall-clock, no randomness, no LLM. Given the same graph snapshot, cue,
-    budget and policy_version, the rendered brief is byte-identical — the
-    contract the golden snapshot tests pin.
+    budget, policy_version and tokenizer, the rendered brief is byte-identical —
+    the contract the golden snapshot tests pin. The token counter's ``stamp`` is
+    recorded on the brief so the tokenizer is part of the policy identity.
     """
     budget = budget or Budget()
     weights = weights or RankWeights()
+    counter = counter or default_token_counter()
     repo_id = repo_id if repo_id is not None else cue.repo_id
 
     ambient = await load_ambient(graph, repo_id=repo_id)
     candidates = await gather_candidates(graph, cue, repo_id)
     ranked = Ranker(weights).rank(cue, candidates)
-    lines = Budgeter(budget).select(ranked)
+    lines = Budgeter(budget, counter).select(ranked)
     hw = await graph_high_water(graph)
     return CuratedBrief(
         policy_version=policy_version,
@@ -751,6 +842,7 @@ async def curate(
         ambient=ambient,
         lines=lines,
         cue=cue,
+        tokenizer_stamp=counter.stamp,
     )
 
 
@@ -864,6 +956,7 @@ def curation_breakdown_payload(brief: CuratedBrief) -> Dict[str, Any]:
     """Structured curation receipt for stamping on the delegation event."""
     return {
         "policy_version": brief.policy_version,
+        "tokenizer_stamp": brief.tokenizer_stamp,
         "graph_high_water": brief.graph_high_water,
         "lines": brief.receipts(),
         "ambient_source_event_id": brief.ambient.source_event_id,
@@ -889,6 +982,7 @@ class Curator:
         self._settings = settings
         self._budget = Budget.from_settings(settings) if settings is not None else Budget()
         self._weights = RankWeights.from_settings(settings) if settings is not None else RankWeights()
+        self._counter = default_token_counter()
         self._cue_builder = CueBuilder(graph)
         self._expander = CueExpander(settings, model_router)
 
@@ -922,5 +1016,6 @@ class Curator:
             budget=self._budget,
             weights=self._weights,
             repo_id=repo_id,
+            counter=self._counter,
         )
         return brief, candidates, cue

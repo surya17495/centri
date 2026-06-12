@@ -17,6 +17,7 @@ dependencies = [
     "aiofiles>=24.1.0",
     "python-multipart>=0.0.17",
     "websockets>=13.0",
+    "tiktoken>=0.8.0",
 ]
 
 [project.optional-dependencies]

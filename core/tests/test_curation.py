@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from centri.curation import (
     AMBIENT_TAG,
     AMBIENT_TOPIC,
+    DEFAULT_ENCODING,
     POLICY_VERSION,
     Budget,
     Budgeter,
@@ -26,8 +27,13 @@ from centri.curation import (
     Curator,
     RankWeights,
     Ranker,
+    TiktokenCounter,
+    TokenCounter,
+    WordCountCounter,
     compute_miss_waste,
     curate,
+    curation_breakdown_payload,
+    default_token_counter,
     gather_candidates,
     load_ambient,
 )
@@ -235,8 +241,9 @@ class TestBudgeter:
         c = Candidate(key="k", item_type="fact", topic="auth", text=long_text,
                       source_event_id="e", created_at="2026-01-01T00:00:00+00:00")
         ranked = Ranker().rank(cue, [c])
-        # Budget fits a 14-word digest (~15 words) but not the 51-word full text.
-        lines = Budgeter(Budget(total=20, ambient=0, floor_decisions=0, floor_rejections=0)).select(ranked)
+        # In real tiktoken tokens the 14-word digest costs ~30 and the full text
+        # ~103, so a budget of 40 fits the digest but forces the full text down.
+        lines = Budgeter(Budget(total=40, ambient=0, floor_decisions=0, floor_rejections=0)).select(ranked)
         assert len(lines) == 1 and lines[0].detail == "digest"
 
     async def test_dropped_when_cannot_afford_digest(self, graph):
@@ -333,6 +340,46 @@ class TestCueExpander:
 
 
 # ---------------------------------------------------------------------------
+# Token counting (deterministic, pinned, swappable; fallback recorded in stamp)
+# ---------------------------------------------------------------------------
+class TestTokenCounter:
+    def test_tiktoken_counts_are_deterministic_and_stamped(self):
+        c = TiktokenCounter(DEFAULT_ENCODING)
+        assert c.stamp == f"tiktoken:{DEFAULT_ENCODING}"
+        n1 = c.count("adopt rotating refresh tokens")
+        n2 = TiktokenCounter(DEFAULT_ENCODING).count("adopt rotating refresh tokens")
+        assert n1 == n2 and n1 > 0
+        # Real subword tokenization: more tokens than whitespace words here.
+        assert n1 >= len("adopt rotating refresh tokens".split())
+
+    def test_wordcount_fallback_counts_words_and_stamps(self):
+        c = WordCountCounter()
+        assert c.stamp == "wordcount:v1"
+        assert c.count("one two three") == 3
+        assert c.count("") == 0
+
+    def test_default_counter_prefers_tiktoken_when_available(self):
+        c = default_token_counter()
+        assert isinstance(c, TokenCounter)
+        # tiktoken is a hard dependency, so the default resolves to the pinned
+        # encoding; the fallback path still records its own honest stamp.
+        assert c.stamp in (f"tiktoken:{DEFAULT_ENCODING}", "wordcount:v1")
+
+    def test_changing_tokenizer_changes_the_stamp(self):
+        assert TiktokenCounter(DEFAULT_ENCODING).stamp != WordCountCounter().stamp
+
+    async def test_fallback_counter_changes_brief_stamp(self, graph):
+        await _seed(graph)
+        cue = await CueBuilder(graph).build("jwt refresh")
+        tik = await curate(graph, cue, counter=TiktokenCounter(DEFAULT_ENCODING))
+        wc = await curate(graph, cue, counter=WordCountCounter())
+        assert tik.tokenizer_stamp == f"tiktoken:{DEFAULT_ENCODING}"
+        assert wc.tokenizer_stamp == "wordcount:v1"
+        # The stamp travels into the spine payload so the degraded path is visible.
+        assert curation_breakdown_payload(wc)["tokenizer_stamp"] == "wordcount:v1"
+
+
+# ---------------------------------------------------------------------------
 # Golden snapshot — byte-identical brief per policy_version
 # ---------------------------------------------------------------------------
 GOLDEN = """\
@@ -355,6 +402,10 @@ class TestGoldenSnapshot:
         brief = await curate(graph, cue)
         assert brief.policy_version == POLICY_VERSION
         assert brief.graph_high_water == "2026-01-05T00:00:00+00:00"
+        # The tokenizer identity is part of the policy stamp; the default counter
+        # is the pinned tiktoken encoding when available (word-count fallback only
+        # records its own stamp, never silently substitutes).
+        assert brief.tokenizer_stamp in (f"tiktoken:{DEFAULT_ENCODING}", "wordcount:v1")
         assert brief.render() == GOLDEN
 
     async def test_render_is_deterministic_across_runs(self, graph):

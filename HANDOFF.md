@@ -8,7 +8,7 @@ Owner: surya (surya.munna95@gmail.com). Repo: https://github.com/surya17495/cent
    of work). Pushed code is the only safe code; the session may die any time.
    Git identity: `-c user.name="surya17495" -c user.email="surya.munna95@gmail.com"`.
 2. **Quality gates before every push:** `cd core && python -m pytest tests/ -q`
-   (currently 197 passed) and, if `shell/` was touched,
+   (currently 202 passed) and, if `shell/` was touched,
    `cd shell && npm run typecheck && npm run test && npm run build` (14 tests).
 3. **Be honest** in README/docs/reports about sandbox-verified vs
    needs-local-build (Tauri binary, real opencode binary, systemd/Caddy on a VM).
@@ -182,7 +182,9 @@ Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
       ISO ordinal; hard filters via the graph's live views; per-item score
       breakdowns kept on every line), **Budgeter** (C — greedy knapsack by score,
       per-section floors so decisions/rejections never starve, full|one-line
-      digest|drop), **Ambient layer** (D — consolidation refreshes a standing
+      digest|drop; costs measured in REAL tokens via a pinned tiktoken
+      `o200k_base` `TokenCounter`, honest `wordcount:v1` fallback recorded in the
+      stamp when tiktoken is unavailable — never silent), **Ambient layer** (D — consolidation refreshes a standing
       digest stored as a reserved Fact `ambient-standing-context`, prepended to
       every brief in its own budget), and **miss/waste instrumentation** (E —
       `compute_miss_waste`, emitted as `curation.brief` with receipts;
@@ -194,11 +196,11 @@ Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
       graph-high-water; `MemoryBriefAssembler` stays the fallback for the bench.
       `memory_graph.RESERVED_FACT_TOPICS` keeps the ambient digest out of the
       general `current_facts` view (still re-derivable). Config: `curation_*`
-      policy knobs. Tests: `test_curation.py` (25: cue building incl.
+      policy knobs. Tests: `test_curation.py` (30: cue building incl.
       alias/anaphora/graph-hop, every ranker feature + superseded-filter, budgeter
-      digest/drop/floor, ambient load/render/exclusion, miss/waste, expander
-      honesty, Curator, and a byte-identical golden snapshot pinned to
-      `POLICY_VERSION`). pytest 197/197.
+      digest/drop/floor in real tokens, ambient load/render/exclusion, miss/waste,
+      expander honesty, Curator, TokenCounter determinism/fallback/stamp, and a
+      byte-identical golden snapshot pinned to `POLICY_VERSION`). pytest 202/202.
 - [ ] **3c.1 Replay harness + quality-per-token bench + write-time embeddings** —
       replay recorded spines + cues through `curate()`, score quality-per-token
       against the `curation.miss`/`curation.waste` ledger; tiered daily→weekly
@@ -231,7 +233,9 @@ Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
   Decisions ratified (shared-core continuity, OpenCode-via-ACP default,
   deterministic memory, north star, single-LLM-config, context-as-cache +
   deterministic-curation + no-visible-remembering/ambient) — see
-  `docs/ROADMAP.md` → "Decisions". pytest 197/197, vitest 14/14, tsc/build clean.
+  `docs/ROADMAP.md` → "Decisions". 3c.0.1 added real tiktoken (`o200k_base`)
+  token budgeting behind a stamped `TokenCounter` (honest word-count fallback).
+  pytest 202/202, vitest 14/14, tsc/build clean.
 - **Next:** 3c.1 replay harness + quality-per-token bench + write-time
   embeddings (per the revised work queue below).
 - **Layout:** `core/` Python FastAPI (src/centri/: app.py, db.py, coordinator,
@@ -273,6 +277,13 @@ Canonical copy is `docs/ROADMAP.md` → "Decisions". Short form:
   stored-timestamp ordinal, never `now()`. Bump `POLICY_VERSION` (and add a new
   golden) for any deliberate brief-shape change. The cue-expander seam may only
   EXPAND THE CUE (add query terms), never select facts.
+- The budgeter measures items in REAL tokens via a `TokenCounter` (default =
+  pinned tiktoken `o200k_base`, stamped `tiktoken:o200k_base`; honest
+  `wordcount:v1` fallback only when tiktoken is unavailable). The active
+  counter's `stamp` rides on every brief (`CuratedBrief.tokenizer_stamp`, in
+  `curation_breakdown_payload`) and IS part of the policy identity: changing the
+  tokenizer/encoding must bump the stamp (and re-pin any affected golden). The
+  fallback path is never silent — its stamp says `wordcount:v1`.
 - The ambient digest is a reserved Fact (`ambient-standing-context`, tag
   `ambient`) excluded from the general `current_facts` view via
   `RESERVED_FACT_TOPICS` — keep it out of the cued candidate set and out of any
