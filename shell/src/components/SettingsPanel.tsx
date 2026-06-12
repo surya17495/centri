@@ -1,5 +1,13 @@
 import { useState, useEffect } from "react";
-import { api, getAuthToken, getBackendUrl, setAuthToken, setBackendUrl } from "../api";
+import {
+  api,
+  cleanAuthToken,
+  getAuthToken,
+  getBackendUrl,
+  normalizeBackendUrl,
+  setAuthToken,
+  setBackendUrl,
+} from "../api";
 import type { DiscoverResponse, StatusResponse } from "../types";
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
@@ -30,6 +38,7 @@ export function SettingsPanel({
 }) {
   const [backend, setBackend] = useState(getBackendUrl());
   const [token, setToken] = useState(getAuthToken());
+  const [backendStatus, setBackendStatus] = useState<string | null>(null);
   const [provider, setProvider] = useState("anthropic");
   const [apiKey, setApiKey] = useState("");
   const [keyStatus, setKeyStatus] = useState<string | null>(null);
@@ -91,11 +100,20 @@ export function SettingsPanel({
     }
   }
 
-  const [backendStatus, setBackendStatus] = useState<string | null>(null);
-
   function saveBackend() {
-    setBackendUrl(backend);
-    setAuthToken(token.trim());
+    const nextBackend = normalizeBackendUrl(backend);
+    const nextToken = cleanAuthToken(token);
+    setBackend(nextBackend || getBackendUrl());
+
+    if (token.trim() && !nextToken) {
+      setToken("");
+      setAuthToken("");
+      setBackendStatus("Token field contains a URL. Paste the auth token, not the backend URL.");
+      return;
+    }
+
+    setBackendUrl(nextBackend);
+    setAuthToken(nextToken);
     onSaved();
     // The WebSocket and any cached fetches still point at the old backend;
     // a reload re-initializes everything against the new URL + token.

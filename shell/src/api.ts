@@ -8,6 +8,8 @@ import type {
 
 const STORAGE_KEY = "centri.backendUrl";
 const TOKEN_KEY = "centri.authToken";
+const CORE_PORT = "8760";
+const SHELL_PORT = "8761";
 
 // When the shell is served over http(s) (e.g. the Docker web deployment on
 // :8761), the core is almost always the same host on :8760 — so default to
@@ -17,7 +19,7 @@ function defaultBackend(): string {
   try {
     const { protocol, hostname } = window.location;
     if (protocol === "http:" || protocol === "https:") {
-      return `http://${hostname}:8760`;
+      return `http://${hostname}:${CORE_PORT}`;
     }
   } catch {
     /* non-browser environment (tests) */
@@ -25,9 +27,35 @@ function defaultBackend(): string {
   return "http://127.0.0.1:8760";
 }
 
+export function normalizeBackendUrl(raw: string): string {
+  const trimmed = raw.trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+
+  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.port === SHELL_PORT) {
+      parsed.port = CORE_PORT;
+    }
+    parsed.pathname = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return trimmed;
+  }
+}
+
+export function cleanAuthToken(raw: string): string {
+  const token = raw.trim();
+  // A common settings mistake is pasting the backend URL into the token field;
+  // never persist that as a bearer token or WS query token.
+  return /^https?:\/\//i.test(token) ? "" : token;
+}
+
 export function getBackendUrl(): string {
   try {
-    return localStorage.getItem(STORAGE_KEY) || defaultBackend();
+    return normalizeBackendUrl(localStorage.getItem(STORAGE_KEY) || defaultBackend());
   } catch {
     return defaultBackend();
   }
@@ -35,7 +63,7 @@ export function getBackendUrl(): string {
 
 export function setBackendUrl(url: string): void {
   try {
-    const cleaned = url.trim().replace(/\/+$/, "");
+    const cleaned = normalizeBackendUrl(url);
     if (cleaned) {
       localStorage.setItem(STORAGE_KEY, cleaned);
     } else {
@@ -48,7 +76,7 @@ export function setBackendUrl(url: string): void {
 
 export function getAuthToken(): string {
   try {
-    return localStorage.getItem(TOKEN_KEY) || "";
+    return cleanAuthToken(localStorage.getItem(TOKEN_KEY) || "");
   } catch {
     return "";
   }
@@ -56,8 +84,9 @@ export function getAuthToken(): string {
 
 export function setAuthToken(token: string): void {
   try {
-    if (token) {
-      localStorage.setItem(TOKEN_KEY, token);
+    const cleaned = cleanAuthToken(token);
+    if (cleaned) {
+      localStorage.setItem(TOKEN_KEY, cleaned);
     } else {
       localStorage.removeItem(TOKEN_KEY);
     }
