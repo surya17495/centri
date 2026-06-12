@@ -8,7 +8,7 @@ Owner: surya (surya.munna95@gmail.com). Repo: https://github.com/surya17495/cent
    of work). Pushed code is the only safe code; the session may die any time.
    Git identity: `-c user.name="surya17495" -c user.email="surya.munna95@gmail.com"`.
 2. **Quality gates before every push:** `cd core && python -m pytest tests/ -q`
-   (currently 208 passed) and, if `shell/` was touched,
+   (currently 251 passed) and, if `shell/` was touched,
    `cd shell && npm run typecheck && npm run test && npm run build` (14 tests).
 3. **Be honest** in README/docs/reports about sandbox-verified vs
    needs-local-build (Tauri binary, real opencode binary, systemd/Caddy on a VM).
@@ -307,6 +307,35 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
       brief render is byte-identical and the golden is unchanged — turning
       embeddings on is a deliberate future bump. Brief stamp gains
       `embedding_stamp`. pytest 233/233.
+- [x] **3c.1-embed Semantic leg ON (Unit 2)** — DONE (2026-06-12). Turned the
+      embedding leg on behind explicit config WITHOUT breaking the 3c.0 golden.
+      New `POLICY_VERSION_EMBED = "3c.1-embed"` selected purely by
+      `active_policy_version(weights)` (positive `embedding_similarity` →
+      embed policy; weight 0.0 → unchanged `3c.0`). Real providers behind the
+      existing seam: `LocalEmbeddingProvider` (lazy fastembed, pinned model,
+      stamp `embedding:local:<model>`), `LiteLLMEmbeddingProvider` (reuses the
+      ModelRouter / existing key resolution, stamp `embedding:litellm:<model>`),
+      and `HashingEmbeddingProvider` (clearly-labeled deterministic BENCH stub,
+      stamp `embedding:hashing-stub:dN`). `resolve_embedding_provider` preference
+      = local → litellm (when `embedding_enabled` + model) → Null (offline
+      default, keeps CI green). Config: `CENTRI_EMBEDDING_{ENABLED,LOCAL_MODEL,MODEL}`.
+      Write-time embedding + idempotent backfill: `Consolidator` embeds
+      `topic: statement` at write (null provider → no vector); `backfill_embeddings()`
+      computes vectors for live nodes lacking one (idempotent via `vector is None`
+      guard, re-writes through INSERT-OR-REPLACE `add_*`), emits
+      `embedding.backfill.{started,progress,completed}` on the spine;
+      honest-unavailable reports `embedded=0`. POST `/memory/embeddings/backfill`
+      exposes it. New golden `GOLDEN_EMBED` pinned to `3c.1-embed` (positive
+      weight + stub provider, stamp `embedding:hashing-stub:d256`), byte-stable
+      like the base golden. Paraphrase bench
+      `python -m centri.bench.paraphrase_embed` (offline, hashing-stub):
+      zero-lexical-overlap cues under a one-line budget, OFF→ON quality-per-token
+      recorded honestly in `docs/centri-bench.md` (surfaced rate 0.0→1.0, recall
+      0.0→1.0, qpt 0.0→0.0939, misses 3→0). Honesty: real local/LiteLLM embedding
+      models are *seam-verified only* (fastembed needs onnxruntime + a model
+      download; LiteLLM needs network) — the bench + golden use the labeled stub
+      so the suite stays offline. Tests: `test_embeddings.py` (17),
+      `test_centri.py::TestEmbeddingBackfill` (1). pytest 251/251.
 - [ ] **3d.1 Waking-up + spontaneous association** — the "feels human"
       proactivity track on 3c.0's machinery: waking-up situating brief on first
       interaction of a session/day, spontaneous association surfacing an
@@ -357,18 +386,35 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
   and write-time embeddings (`EmbeddingProvider` honest-unavailable, `vector`
   column on `mem_decisions`/`mem_facts`, `embedding_similarity` ranker feature =
   pure cosine). Embedding weight defaults to 0.0 so POLICY_VERSION stays `3c.0`
-  and the golden brief is byte-identical. pytest 233/233.
+  and the golden brief is byte-identical. pytest 233/233. **Unit 2 / 3c.1-embed
+  DONE (2026-06-12):** semantic leg turned ON behind explicit config without
+  breaking the 3c.0 golden — `POLICY_VERSION_EMBED = "3c.1-embed"` selected by
+  `active_policy_version(weights)` (positive `embedding_similarity` → embed
+  policy + its own `GOLDEN_EMBED`; weight 0.0 → unchanged `3c.0`). Real providers
+  behind the seam (`LocalEmbeddingProvider` fastembed, `LiteLLMEmbeddingProvider`
+  reusing existing key resolution, `HashingEmbeddingProvider` labeled bench stub),
+  `resolve_embedding_provider` = local→litellm→Null (offline default). Write-time
+  embedding in consolidation + idempotent `backfill_embeddings()` (POST
+  `/memory/embeddings/backfill`, `embedding.backfill.*` spine events,
+  honest-unavailable reports `embedded=0`). Offline paraphrase bench
+  (`centri.bench.paraphrase_embed`, hashing-stub) records OFF→ON quality-per-token
+  in `docs/centri-bench.md` (surfaced 0.0→1.0, recall 0.0→1.0, qpt 0.0→0.0939,
+  misses 3→0). Real local/LiteLLM models are seam-verified only (need
+  onnxruntime+model download / network); bench + golden use the labeled stub.
+  pytest 251/251.
 - **North star v2 (Decision 14, ratified 2026-06-11 PT):** CENTRI is a
   **reasoning partner** — conversational seamlessness first-class, thinks like a
   human with machine superpowers (memory bandwidth, VM tool use, voice). Docs
   updated (ROADMAP/VISION/HANDOFF Decisions + scope test). The "feels human"
   conversation items are no longer "premature Jarvis."
-- **Next:** Phase 2 (feels human / was 3d) — prose ambient narrative, waking-up
-  briefing, spontaneous association, dormancy nudges — on the now-complete
-  Phase-1 machinery. Voice (Phase 5) + VM tool use (Phase 4) are the following
-  rounds on the now-accelerated trajectory (need a real machine /
-  approval-gated tool contract). Optional Phase-1 follow-ons: Graphiti/Hindsight
-  external baselines.
+- **Next:** Opinions-with-confidence (Unit 3) — a typed agent-stance memory class
+  (confidence + receipts, supersession, own type prior, rendered as stances in
+  briefs, deterministic consolidation only). Then Phase 2 (feels human / was 3d) —
+  prose ambient narrative, waking-up briefing, spontaneous association, dormancy
+  nudges — on the now-complete Phase-1 machinery. Voice (Phase 5) + VM tool use
+  (Phase 4) are the following rounds on the now-accelerated trajectory (need a
+  real machine / approval-gated tool contract). Optional Phase-1 follow-ons:
+  Graphiti/Hindsight external baselines.
 - **Layout:** `core/` Python FastAPI (src/centri/: app.py, db.py, coordinator,
   consolidation, memory_graph, memory_brief, curation, curation_replay, briefing, opencode_config,
   models_catalog, model_router, hands/, ingest/ [base + registry +
@@ -415,18 +461,28 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
   `curation_breakdown_payload`) and IS part of the policy identity: changing the
   tokenizer/encoding must bump the stamp (and re-pin any affected golden). The
   fallback path is never silent — its stamp says `wordcount:v1`.
-- 3c.1 write-time embeddings: the `embedding_similarity` ranker feature ships at
-  weight **0.0** (config `curation_w_embedding_similarity`) so POLICY_VERSION
-  stays `3c.0` and the golden brief is byte-identical — the feature is computed +
-  shown in the breakdown for explainability but cannot move a score. Turning it
-  on (positive weight + a real provider behind `resolve_embedding_provider`) is a
-  deliberate `POLICY_VERSION` bump + new golden. Embeddings are computed at WRITE
-  time only; read time is pure `cosine_similarity` over stored `Candidate.vector`
-  (no model call) so `curate()` purity holds. The provider `stamp`
+- Write-time embeddings + the two-policy split (3c.1 → Unit 2): the
+  `embedding_similarity` ranker feature is read-time pure `cosine_similarity`
+  over stored `Candidate.vector` (no model call) so `curate()` purity holds. The
+  active policy is chosen by `active_policy_version(weights)`: weight **0.0** →
+  `POLICY_VERSION = "3c.0"` (default; golden in `test_curation.py` stays
+  byte-identical), positive weight → `POLICY_VERSION_EMBED = "3c.1-embed"` (its
+  own golden `GOLDEN_EMBED` in `test_embeddings.py`). **Both goldens are
+  load-bearing — do not break either.** A deliberate brief-shape change under a
+  positive weight must re-pin `GOLDEN_EMBED`; under weight 0.0 must re-pin the
+  base golden. Enabling embeddings (a real provider via
+  `resolve_embedding_provider` + a positive `curation_w_embedding_similarity`) is
+  therefore not a silent change — it lands a node on the `3c.1-embed` policy with
+  its own pinned render. Embeddings are computed at WRITE time only (consolidation
+  `_embed`, and `backfill_embeddings()` idempotently for pre-existing nodes — the
+  `vector is None` read is the idempotency guard). The provider `stamp`
   (`embedding:unavailable` by default) rides on `CuratedBrief.embedding_stamp` and
-  in `curation_breakdown_payload`, like the tokenizer stamp. `mem_decisions`/
-  `mem_facts` carry a nullable `vector` (JSON array, additive ALTER); open loops
-  do not.
+  in `curation_breakdown_payload`, like the tokenizer stamp; it is part of the
+  policy identity (the `3c.1-embed` golden pins `embedding:hashing-stub:d256`).
+  `resolve_embedding_provider` stays honest-unavailable (Null) unless
+  `CENTRI_EMBEDDING_*` config selects a local/litellm provider — nothing turns on
+  by accident. `mem_decisions`/`mem_facts` carry a nullable `vector` (JSON array,
+  additive ALTER); open loops do not.
 - The ambient digest is a reserved Fact (`ambient-standing-context`, tag
   `ambient`) excluded from the general `current_facts` view via
   `RESERVED_FACT_TOPICS` — keep it out of the cued candidate set and out of any

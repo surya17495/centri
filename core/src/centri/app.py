@@ -348,6 +348,25 @@ async def ingest_opencode(req: IngestOpenCodeRequest) -> Dict[str, Any]:
     return result
 
 
+@app.post("/memory/embeddings/backfill")
+async def embeddings_backfill() -> Dict[str, Any]:
+    """Idempotently compute write-time vectors for existing graph nodes (Unit 2).
+
+    Live decisions/facts with no stored vector are embedded with the configured
+    provider and re-written in place; re-running is a no-op once vectors exist.
+    Honest-unavailable: with no embedding model configured this reports
+    ``embedded: 0`` rather than faking work. Progress streams on the spine as
+    ``embedding.backfill.*`` events.
+    """
+    if runtime.consolidator is None:
+        return {"available": False, "reason": "consolidation subsystem not booted"}
+    available = bool(getattr(runtime.embedding_provider, "available", False))
+    result = await runtime.consolidator.backfill_embeddings()
+    result["available"] = available
+    result["stamp"] = getattr(runtime.embedding_provider, "stamp", "embedding:unavailable")
+    return result
+
+
 @app.get("/ingest/discover")
 async def ingest_discover() -> Dict[str, Any]:
     """Probe well-known coding-agent stores and report what was found (3b.4).

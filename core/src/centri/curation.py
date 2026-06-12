@@ -34,6 +34,7 @@ dependency now.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass, field
@@ -52,6 +53,28 @@ from centri.memory_graph import (
 # snapshots are keyed by this, so a deliberate change is a new snapshot, never a
 # silent drift.
 POLICY_VERSION = "3c.0"
+
+# Unit 2 (semantic leg ON): when the embedding-similarity feature carries a
+# POSITIVE weight, briefs can change shape (a paraphrase with zero token overlap
+# can now surface), so the policy identity must change. This is the deliberate
+# POLICY_VERSION bump the 3c.1 contract called for. The default weight is still
+# 0.0, so the default render stays on POLICY_VERSION "3c.0" with its existing
+# golden; only an explicitly-enabled positive embedding weight selects this
+# version (and its own golden). The active version is chosen by
+# :func:`active_policy_version` from the weights, never silently.
+POLICY_VERSION_EMBED = "3c.1-embed"
+
+
+def active_policy_version(weights: "RankWeights") -> str:
+    """The policy version implied by the active ranker weights.
+
+    A positive ``embedding_similarity`` weight is a deliberate, shape-changing
+    policy (semantic recall can now move a score), so it selects
+    :data:`POLICY_VERSION_EMBED`; otherwise the byte-identical pre-embedding
+    policy :data:`POLICY_VERSION`. Pure function of the weights — no wall-clock,
+    no config read here — so a replay re-derives the same stamp.
+    """
+    return POLICY_VERSION_EMBED if weights.embedding_similarity > 0.0 else POLICY_VERSION
 
 _STOPWORDS = {
     "the", "a", "an", "to", "for", "of", "and", "or", "in", "on", "with", "we",
@@ -268,14 +291,146 @@ class NullEmbeddingProvider(EmbeddingProvider):
         return None
 
 
-def resolve_embedding_provider(settings: Any = None) -> EmbeddingProvider:
+class LocalEmbeddingProvider(EmbeddingProvider):
+    """Local pinned-model embedding via ``fastembed`` (ONNX MiniLM-class).
+
+    Preferred provider (Unit 2): no network at read OR write time once the model
+    is cached, and the model name is pinned + recorded in the stamp like the
+    tokenizer. ``fastembed`` is an OPTIONAL dependency — if it (or its model
+    cache) is unavailable the constructor raises and the resolver falls back, so
+    the offline default stays :class:`NullEmbeddingProvider` and tests stay green.
+    """
+
+    def __init__(self, model_name: str):
+        # Imported lazily so the package is never a hard dependency. A missing
+        # package / model cache raises here and the resolver degrades honestly.
+        from fastembed import TextEmbedding  # type: ignore
+
+        self._model_name = model_name
+        self._model = TextEmbedding(model_name=model_name)
+        self.stamp = f"embedding:local:{model_name}"
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    def embed(self, text: str) -> Optional[List[float]]:
+        if not (text or "").strip():
+            return None
+        try:
+            vecs = list(self._model.embed([text]))
+        except Exception:  # noqa: BLE001 — a runtime failure must not poison writes
+            return None
+        if not vecs:
+            return None
+        return [float(x) for x in vecs[0]]
+
+
+class LiteLLMEmbeddingProvider(EmbeddingProvider):
+    """Network embedding via the existing :class:`ModelRouter` (LiteLLM route).
+
+    Fallback provider (Unit 2) reusing the ratified provider-key resolution
+    (``CENTRI_*`` env → OpenCode auth fallback) — it never configures a provider
+    twice (Decision 5). Used only when local fastembed is unavailable and an
+    embedding model is configured. The model name is pinned by config and
+    recorded in the stamp.
+    """
+
+    def __init__(self, model_router: Any, model_name: str):
+        self._mr = model_router
+        self._model_name = model_name
+        self.stamp = f"embedding:litellm:{model_name}"
+
+    @property
+    def available(self) -> bool:
+        return self._mr is not None
+
+    def embed(self, text: str) -> Optional[List[float]]:
+        if not (text or "").strip() or self._mr is None:
+            return None
+        try:
+            out = self._mr.embed([text])
+        except Exception:  # noqa: BLE001
+            return None
+        if not out or out[0] is None:
+            return None
+        return [float(x) for x in out[0]]
+
+
+class HashingEmbeddingProvider(EmbeddingProvider):
+    """Deterministic offline embedding for BENCH FIXTURES ONLY — clearly labeled.
+
+    NOT a semantic model: it maps the stemmed token *set* of a text into a fixed
+    bag-of-words vector over a salted hash space, so two paraphrases that share
+    LEMMA-level vocabulary (e.g. "database"/"databases", "mock"/"mocks") land
+    near each other while unrelated texts stay orthogonal — enough to exercise
+    the embedding ranker feature and the quality-per-token bench offline, with no
+    network and no model download. The stamp says ``embedding:hashing-stub`` so
+    nothing mistakes it for a real model. Pure + deterministic (re-derivable).
+    """
+
+    def __init__(self, dim: int = 64):
+        self._dim = dim
+        self.stamp = f"embedding:hashing-stub:d{dim}"
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @staticmethod
+    def _stem(tok: str) -> str:
+        # Tiny deterministic stemmer so trivial morphology (plurals/verb forms)
+        # does not split a concept across dimensions. Bench-only heuristic.
+        for suf in ("ing", "ed", "es", "s"):
+            if len(tok) > len(suf) + 2 and tok.endswith(suf):
+                return tok[: -len(suf)]
+        return tok
+
+    def embed(self, text: str) -> Optional[List[float]]:
+        toks = {self._stem(t) for t in _tokens(text)}
+        if not toks:
+            return None
+        vec = [0.0] * self._dim
+        for t in toks:
+            h = int(hashlib.sha1(t.encode("utf-8")).hexdigest(), 16)
+            vec[h % self._dim] += 1.0
+        return vec
+
+
+def resolve_embedding_provider(settings: Any = None, model_router: Any = None) -> EmbeddingProvider:
     """The configured embedding provider, honest-unavailable by default.
 
-    3c.1 ships the seam and the deterministic fallback; a real network-backed
-    provider slots in here behind ``settings.model_embeddings`` without changing
-    the read path. With no model configured (tests, offline) the null provider
-    runs, so the suite needs no network/keys.
+    Preference order (Unit 2): (a) a local pinned fastembed model when
+    ``CENTRI_EMBEDDING_LOCAL_MODEL`` is set and the package/model is installable;
+    (b) the LiteLLM route via :class:`ModelRouter` when an embedding model is
+    configured (``model_embeddings`` / ``CENTRI_EMBEDDING_*``), reusing the
+    existing key resolution; otherwise (c) :class:`NullEmbeddingProvider` — the
+    offline default that keeps CI/tests green. Enabling embeddings is therefore
+    explicit config; nothing turns on by accident.
     """
+    if settings is None:
+        return NullEmbeddingProvider()
+
+    local_model = getattr(settings, "embedding_local_model", "") or ""
+    if local_model:
+        try:
+            return LocalEmbeddingProvider(local_model)
+        except Exception:  # noqa: BLE001 — package/model absent → degrade honestly
+            pass
+
+    network_model = getattr(settings, "embedding_model", "") or getattr(settings, "model_embeddings", "") or ""
+    if network_model and getattr(settings, "embedding_enabled", False):
+        mr = model_router
+        if mr is None:
+            try:
+                from centri.model_router import ModelRouter
+
+                mr = ModelRouter()
+            except Exception:  # noqa: BLE001
+                mr = None
+        if mr is not None:
+            return LiteLLMEmbeddingProvider(mr, network_model)
+
     return NullEmbeddingProvider()
 
 
@@ -1090,7 +1245,8 @@ class Curator:
         self._budget = Budget.from_settings(settings) if settings is not None else Budget()
         self._weights = RankWeights.from_settings(settings) if settings is not None else RankWeights()
         self._counter = default_token_counter()
-        self._embeddings = resolve_embedding_provider(settings)
+        self._embeddings = resolve_embedding_provider(settings, model_router)
+        self._policy_version = active_policy_version(self._weights)
         self._cue_builder = CueBuilder(graph)
         self._expander = CueExpander(settings, model_router)
 
@@ -1131,6 +1287,7 @@ class Curator:
             cue,
             budget=self._budget,
             weights=self._weights,
+            policy_version=self._policy_version,
             repo_id=repo_id,
             counter=self._counter,
             embedding_provider=self._embeddings,

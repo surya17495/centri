@@ -96,6 +96,53 @@ metrics, and method here, before the consolidation worker, supersession, and
 cue-driven injection exist, the benchmark stays an honest measure rather than a
 self-fulfilling one.
 
+## Semantic leg — paraphrase recall (Unit 2, 3c.1-embed)
+
+The semantic-leg work (write-time embeddings + a positive `embedding_similarity`
+weight under policy `3c.1-embed`) ships with an **offline, deterministic** bench
+that *measures, doesn't assert*: `python -m centri.bench.paraphrase_embed`
+(`--json` for machine output). It records before/after **quality-per-token** on
+paraphrase-style cues — cues that share **zero exact lexical tokens** with the
+target fact, so the lexical-overlap leg scores them at 0 and only the embedding
+leg can bridge the gap.
+
+**Honesty caveat (read this first).** The bench fixture uses
+`HashingEmbeddingProvider` — a clearly-labeled stub whose stamp is
+`embedding:hashing-stub:dN`, **not a real model**. It maps a text's *stemmed
+token set* into a salted hash space, so two phrasings that share lemma-level
+vocabulary (token/tokens, mock/mocked, backend/backends) land near each other
+while unrelated texts stay orthogonal. That is enough to exercise the ranker
+plumbing and the quality-per-token math offline with no network or model
+download. With a real embedding model the *same read path* applies — only the
+vectors change. The numbers below therefore demonstrate the **mechanism**, not a
+model's semantic quality.
+
+**Setup.** Three fixtures (`auth-token-rotation`, `db-testing-convention`,
+`layout-module-home`). Each seeds one needed target fact plus two distractor
+facts that are *newer* than the target, then issues a paraphrase cue under a
+deliberately tight budget (room for one fact line). With embeddings OFF the
+recency leg pulls a distractor into the single slot; the embedding leg is what
+should pull the target in instead. Miss/waste is the same signal the live path
+records (`compute_miss_waste` against the turn transcript); quality-per-token is
+`F1 / tokens` over that miss/waste ledger.
+
+**Result (deterministic; re-run to reproduce byte-for-byte):**
+
+| metric                   | OFF (w=0.0) | ON (w=2.0) |
+|--------------------------|-------------|------------|
+| paraphrase surfaced rate | 0.0         | 1.0        |
+| mean recall              | 0.0         | 1.0        |
+| mean quality-per-token   | 0.0         | 0.09393939 |
+| total misses (3 cues)    | 3           | 0          |
+
+Per-fixture, OFF surfaces the target in 0/3 cues (quality-per-token 0.0, one miss
+each); ON surfaces it in 3/3 (quality-per-token 0.0909 / 0.0909 / 0.1000, zero
+misses). The OFF→ON delta is the whole point: with no lexical overlap the
+paraphrase is invisible to the lexical leg, and the semantic leg is what recovers
+it. The default policy (`3c.0`, weight 0.0) is unchanged and its golden stays
+byte-identical — the embedding leg only engages under the `3c.1-embed` policy a
+positive weight selects.
+
 ## References
 
 - LongMemEval (saturated conversational recall): <https://arxiv.org/abs/2410.10813>

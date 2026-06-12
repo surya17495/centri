@@ -453,3 +453,18 @@ class TestHands:
         t = [e for e in result.events_to_record if e["type"] == "hand.transcript"][0]
         assert t["text"] == ""
         assert "fact" not in t  # consolidation must never confabulate from nothing
+
+
+class TestEmbeddingBackfill:
+    """Unit 2: POST /memory/embeddings/backfill is honest-unavailable by default
+    (no embedding model configured in the test env) and reports embedded=0 rather
+    than faking work."""
+
+    async def test_backfill_endpoint_honest_unavailable(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            body = client.post("/memory/embeddings/backfill").json()
+            assert body["available"] is False
+            assert body["embedded"] == 0
+            assert body["stamp"] == "embedding:unavailable"

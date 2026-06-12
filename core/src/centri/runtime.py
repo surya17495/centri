@@ -95,7 +95,18 @@ class Runtime:
         # 6b. Phase 2 typed memory graph + consolidation worker + cue injection
         self.memory_graph = MemoryGraph(self.db)
         await self.memory_graph.ensure_tables()
-        self.consolidator = Consolidator(self.db, self.memory_graph, event_bus=self.event_bus)
+        # Write-time embeddings (Unit 2): resolve the configured provider once and
+        # share it between consolidation (writes vectors) and the Curator (embeds
+        # the cue). Honest-unavailable by default (NullEmbeddingProvider).
+        from centri.curation import resolve_embedding_provider
+
+        self.embedding_provider = resolve_embedding_provider(settings)
+        self.consolidator = Consolidator(
+            self.db,
+            self.memory_graph,
+            event_bus=self.event_bus,
+            embedding_provider=self.embedding_provider,
+        )
         # Ingestion adapter registry (3b.4): OpenCode + Claude Code + Cursor share
         # one HWM/idempotency/redaction core. opencode_ingestor stays the OpenCode
         # adapter so the 3b.3 endpoint + scheduler contract is unchanged.

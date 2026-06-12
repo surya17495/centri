@@ -59,10 +59,40 @@ _HINT_KEYS = ("decision", "fact", "open_loop", "loop_resolution")
 class Consolidator:
     """Batch worker that folds events into the typed memory graph."""
 
-    def __init__(self, db: Any, graph: MemoryGraph, event_bus: Any = None):
+    def __init__(
+        self,
+        db: Any,
+        graph: MemoryGraph,
+        event_bus: Any = None,
+        embedding_provider: Any = None,
+    ):
         self._db = db
         self._graph = graph
         self._event_bus = event_bus
+        # Write-time embeddings (Unit 2): when a real provider is configured, a
+        # decision/fact's vector is computed HERE (at write) and stored on the
+        # node. Read time stays pure cosine (no model call). Honest-unavailable
+        # by default (NullEmbeddingProvider yields None → no vector written).
+        if embedding_provider is None:
+            from centri.curation import NullEmbeddingProvider
+
+            embedding_provider = NullEmbeddingProvider()
+        self._embeddings = embedding_provider
+
+    def _embed(self, topic: str, statement: str) -> Optional[List[float]]:
+        """Write-time vector for a node, or None when honest-unavailable.
+
+        The embedded text is ``topic + statement`` so a node's vector reflects
+        both its subject and its content. Never raises into the fold loop.
+        """
+        if not getattr(self._embeddings, "available", False):
+            return None
+        text = f"{topic}: {statement}".strip()
+        try:
+            return self._embeddings.embed(text)
+        except Exception:  # noqa: BLE001 — embedding must never break a write
+            logger.debug("write-time embed failed", exc_info=True)
+            return None
 
     # ------------------------------------------------------------------
     # Public API
@@ -143,6 +173,91 @@ class Consolidator:
             await self._graph.supersede_fact(ambient)
         except Exception:
             logger.debug("Ambient digest refresh failed", exc_info=True)
+
+    async def backfill_embeddings(self, *, batch_size: int = 200) -> Dict[str, int]:
+        """Idempotently compute write-time vectors for existing nodes that lack one.
+
+        For each live decision/fact with no stored ``vector``, compute it with the
+        configured provider and re-write the node in place (``add_*`` is
+        INSERT OR REPLACE, keyed by id, so history/supersession pointers are
+        untouched). Re-running is a no-op once vectors exist — the read of
+        ``vector is None`` is the idempotency guard, mirroring the ingest HWM
+        pattern. Emits ``embedding.backfill.{started,progress,completed}`` on the
+        spine so the shell timeline shows it. Honest-unavailable: with the null
+        provider nothing is embedded and the result reports ``embedded=0``.
+        """
+        await self._graph.ensure_tables()
+        available = bool(getattr(self._embeddings, "available", False))
+        stamp = getattr(self._embeddings, "stamp", "embedding:unavailable")
+
+        decisions = await self._graph.current_decisions()
+        facts = await self._graph.current_facts()
+        pending = [("decision", d) for d in decisions if d.vector is None]
+        pending += [("fact", f) for f in facts if f.vector is None]
+        total = len(pending)
+
+        await self._emit_backfill("started", {"total": total, "available": available, "stamp": stamp})
+
+        embedded = 0
+        skipped = 0
+        if not available:
+            # Nothing to do, but report honestly: these nodes stay un-embedded.
+            await self._emit_backfill(
+                "completed",
+                {"total": total, "embedded": 0, "skipped": total, "stamp": stamp},
+            )
+            return {"total": total, "embedded": 0, "skipped": total}
+
+        done = 0
+        for kind, node in pending:
+            vec = self._embed(node.topic, node.statement)
+            if vec is None:
+                skipped += 1
+            else:
+                node.vector = vec
+                if kind == "decision":
+                    await self._graph.add_decision(node)
+                else:
+                    await self._graph.add_fact(node)
+                embedded += 1
+            done += 1
+            if done % batch_size == 0:
+                await self._emit_backfill(
+                    "progress", {"done": done, "total": total, "embedded": embedded}
+                )
+
+        await self._emit_backfill(
+            "completed",
+            {"total": total, "embedded": embedded, "skipped": skipped, "stamp": stamp},
+        )
+        return {"total": total, "embedded": embedded, "skipped": skipped}
+
+    async def _emit_backfill(self, phase: str, body: Dict[str, Any]) -> None:
+        ts = _now()
+        payload = {"phase": phase, **body}
+        try:
+            await self._db.append_event(
+                event_id=f"embed-backfill-{phase}-{ts}",
+                type=f"embedding.backfill.{phase}",
+                source="memory",
+                ts=ts,
+                payload=payload,
+            )
+        except Exception:
+            logger.debug("embedding.backfill ledger write failed", exc_info=True)
+        if self._event_bus is not None:
+            try:
+                await self._event_bus.publish(
+                    {
+                        "type": f"embedding.backfill.{phase}",
+                        "ts": ts,
+                        "source": "memory",
+                        "payload": payload,
+                        "summary": f"embedding backfill {phase}: {body}",
+                    }
+                )
+            except Exception:
+                logger.debug("embedding.backfill publish failed", exc_info=True)
 
     async def rebuild_from_events(self) -> int:
         """Discard the graph and re-derive it from the full ledger.
@@ -228,6 +343,7 @@ class Consolidator:
             source_event_id=eid,
             repo_id=repo_id,
             tags=list(body.get("tags") or []),
+            vector=self._embed(topic, statement),
         )
         await self._graph.supersede_decision(dec)
         return {"kind": "decision", "topic": topic, "stance": stance, "id": dec.id}
@@ -246,6 +362,7 @@ class Consolidator:
             source_event_id=eid,
             repo_id=repo_id,
             tags=list(body.get("tags") or []),
+            vector=self._embed(topic, statement),
         )
         await self._graph.supersede_fact(fact)
         return {"kind": "fact", "topic": topic, "id": fact.id}

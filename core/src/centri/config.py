@@ -115,6 +115,15 @@ class Settings:
     curation_w_embedding_similarity: float = 0.0
     curation_cue_expansion: str = ""
 
+    # Unit 2 — semantic leg. Embeddings are OFF by default (NullEmbeddingProvider,
+    # offline green tests). Enabling is explicit: set a local pinned model
+    # (preferred, no network) OR enable the LiteLLM network route with a model.
+    # When ON, pair with a positive curation_w_embedding_similarity to actually
+    # let semantic recall move a score (which bumps POLICY_VERSION → 3c.1-embed).
+    embedding_enabled: bool = False
+    embedding_local_model: str = ""   # e.g. "BAAI/bge-small-en-v1.5" (fastembed)
+    embedding_model: str = ""         # network model id for the LiteLLM route
+
     # Autonomy
     autonomy_level: str = "autonomous_local"
     auto_commit: bool = True
@@ -188,6 +197,9 @@ class Settings:
                 os.getenv("CENTRI_CURATION_W_EMBEDDING_SIMILARITY", "0.0")
             ),
             curation_cue_expansion=os.getenv("CENTRI_CURATION_CUE_EXPANSION", ""),
+            embedding_enabled=os.getenv("CENTRI_EMBEDDING_ENABLED", "false").lower() == "true",
+            embedding_local_model=os.getenv("CENTRI_EMBEDDING_LOCAL_MODEL", ""),
+            embedding_model=os.getenv("CENTRI_EMBEDDING_MODEL", ""),
             enabled_hands=enabled_hands,
             hand_priority=hand_priority,
             autonomy_level=os.getenv("CENTRI_AUTONOMY_LEVEL", "autonomous_local"),
