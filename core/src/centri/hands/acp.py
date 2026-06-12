@@ -254,6 +254,7 @@ class AcpHand(Hand):
         )
         conn = AcpConnection(proc)
         collected: List[str] = []
+        thoughts: List[str] = []
         artifacts: List[Dict[str, Any]] = []
         # Full-fidelity turn record (Phase 3b.1): agent text is kept untruncated
         # and tool activity is traced so the spine retains the whole session,
@@ -279,6 +280,13 @@ class AcpHand(Hand):
                     # UI gets a short live summary; the full text is preserved in
                     # the hand.transcript event recorded at turn end.
                     await _emit({"type": "task.progress", "source": "hand", "summary": text[:240]})
+            elif kind == "agent_thought_chunk":
+                # Real OpenCode streams reasoning as a distinct update kind (the
+                # fake agent never did). Keep it in the transcript trace for
+                # fidelity, but never in the user-facing message text or fact.
+                text = (update.get("content") or {}).get("text", "")
+                if text:
+                    thoughts.append(text)
             elif kind == "tool_call":
                 title = update.get("title", update.get("kind", "tool"))
                 tool_trace.append({
@@ -366,6 +374,9 @@ class AcpHand(Hand):
                 "text": full_text,
                 "tool_trace": tool_trace,
             }
+            reasoning = "".join(thoughts).strip()
+            if reasoning:
+                transcript_event["reasoning"] = reasoning
             if full_text:
                 transcript_event["fact"] = {
                     "topic": f"delegated-session:{session_id or request.id}",

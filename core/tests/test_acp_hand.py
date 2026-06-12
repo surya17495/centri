@@ -8,6 +8,7 @@ events, the permission round-trip, and cancellation.
 
 import asyncio
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -155,3 +156,76 @@ async def test_transcript_event_keeps_full_text(tmp_path, monkeypatch):
             assert len(ev["summary"]) <= 240
     types = [e["type"] for e in result.events_to_record]
     assert types.index("hand.transcript") < types.index("hand.completed")
+
+
+async def test_realish_update_kinds_are_handled(tmp_path, monkeypatch):
+    """The real opencode binary emits update kinds the original fake never did:
+    ``agent_thought_chunk``, ``available_commands_update``, ``usage_update``.
+
+    Verified against the real binary (see ``test_real_opencode_acp_lifecycle``);
+    this deterministic test pins the behavior so CI catches a regression even
+    when the binary is absent. Reasoning is captured into the transcript's
+    ``reasoning`` field but never leaks into the user-facing summary or fact.
+    """
+    monkeypatch.setenv("ACP_FAKE_REALISH", "1")
+    hand = AcpHand(command=_command("stream"))
+    events = []
+
+    async def sink(ev):
+        events.append(ev)
+
+    result = await hand.execute(_request(tmp_path), event_sink=sink)
+    assert result.status == "completed"
+    # The unknown command/usage updates did not crash the turn.
+    assert "Working on it." in result.summary
+    assert "Done." in result.summary
+
+    transcripts = [e for e in result.events_to_record if e["type"] == "hand.transcript"]
+    assert len(transcripts) == 1
+    t = transcripts[0]
+    # Reasoning is captured for fidelity...
+    assert "reasoning" in t
+    assert "The user wants me to work on it." in t["reasoning"]
+    # ...but never in the user-facing message text or fact statement.
+    assert "The user wants me to work on it." not in t["text"]
+    assert "The user wants me to work on it." not in t["fact"]["statement"]
+
+
+@pytest.mark.skipif(shutil.which("opencode") is None, reason="opencode binary not on PATH")
+async def test_real_opencode_acp_lifecycle(tmp_path):
+    """Integration test against the REAL ``opencode acp`` binary.
+
+    Skipped when opencode is not installed. Drives the full lifecycle
+    (initialize -> session/new -> session/prompt) through AcpHand and asserts a
+    protocol-compatible, honest outcome. Either:
+      - the turn completes (a model was resolvable in this environment), or
+      - it fails/unavailable honestly (no model key) — never a hang or crash.
+    The hand must not raise and must record an honest event trail.
+    """
+    hand = AcpHand(command="opencode acp")
+    health = await hand.health()
+    assert health.healthy is True
+
+    events = []
+
+    async def sink(ev):
+        events.append(ev)
+
+    req = HandoffRequest(
+        id="hof-real-acp",
+        to_capability="coding.start_task",
+        user_intent="Reply with exactly the word PONG and do nothing else.",
+        context=ContextPacket(repo_state=RepoState(id="r1", name="proj", root=str(tmp_path))),
+    )
+    result = await asyncio.wait_for(hand.execute(req, event_sink=sink), timeout=120.0)
+
+    # Honest outcome: a real protocol status, never an unhandled crash.
+    assert result.status in ("completed", "failed", "error", "unavailable")
+    # A real session was negotiated and its uid carried on the spine.
+    assert any(e.get("type") == "hand.progress" and e.get("session_uid") for e in events)
+    # The turn was recorded honestly (transcript + completion when it ran).
+    recorded = [e["type"] for e in result.events_to_record]
+    if result.status == "completed":
+        assert result.session_uid and result.session_uid.startswith("ses")
+        assert "hand.transcript" in recorded
+        assert "hand.completed" in recorded

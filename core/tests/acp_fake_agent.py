@@ -46,6 +46,26 @@ def read_msg():
 
 
 def stream_updates(session_id):
+    if os.environ.get("ACP_FAKE_REALISH"):
+        # Update kinds the *real* opencode binary emits that the original fake
+        # never did: a thought chunk (reasoning) and an available-commands
+        # notification. The hand must trace the thought and ignore the commands
+        # update without crashing. See the real-binary probe in test_acp_hand.py.
+        notify("session/update", {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "available_commands_update",
+                "availableCommands": [{"name": "init", "description": "guided setup"}],
+            },
+        })
+        notify("session/update", {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "agent_thought_chunk",
+                "messageId": "t1",
+                "content": {"type": "text", "text": "The user wants me to work on it."},
+            },
+        })
     notify("session/update", {
         "sessionId": session_id,
         "update": {
@@ -81,6 +101,11 @@ def stream_updates(session_id):
             "content": {"type": "text", "text": " Done."},
         },
     })
+    if os.environ.get("ACP_FAKE_REALISH"):
+        notify("session/update", {
+            "sessionId": session_id,
+            "update": {"sessionUpdate": "usage_update", "used": 8805, "size": 200000},
+        })
     if os.environ.get("ACP_FAKE_LONG"):
         # A deliberately long chunk (>240 chars) so tests can prove the
         # transcript event keeps full text while UI summaries stay truncated.

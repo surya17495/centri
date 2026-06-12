@@ -336,6 +336,27 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
       download; LiteLLM needs network) — the bench + golden use the labeled stub
       so the suite stays offline. Tests: `test_embeddings.py` (17),
       `test_centri.py::TestEmbeddingBackfill` (1). pytest 251/251.
+- [x] **A1 Real `opencode acp` binary verification** — DONE (2026-06-12).
+      Installed the real binary in-sandbox (`npm i -g opencode-ai`, v1.17.4) and
+      drove `AcpHand` through the full ACP lifecycle
+      (`initialize → session/new → session/prompt`) against it. **It works in
+      this sandbox** — opencode's default provider resolved a model with no key,
+      streamed a real turn, and returned `stopReason=end_turn`; the hand recorded
+      an honest `hand.transcript`+`hand.completed` trail with a receipt.
+      **Divergences from `acp_fake_agent.py` (all handled gracefully, no
+      crash/hang):** the real binary emits `agent_thought_chunk` (reasoning),
+      `usage_update`, and `available_commands_update` session/update kinds the
+      fake never did, and `session/new` returns rich `configOptions` /
+      `agentCapabilities` (`loadSession`, `sessionCapabilities`,
+      `mcpCapabilities`). **Fix applied:** `AcpHand` now captures
+      `agent_thought_chunk` into a new transcript `reasoning` field for fidelity
+      (never leaked into the user-facing summary or fact); the other unknown
+      kinds are correctly ignored. Tests:
+      `test_acp_hand.py::test_real_opencode_acp_lifecycle`
+      (`@pytest.mark.skipif(shutil.which("opencode") is None)` — RAN, not skipped,
+      in this sandbox) and `::test_realish_update_kinds_are_handled` (deterministic
+      via `ACP_FAKE_REALISH=1`, pins the behavior when the binary is absent).
+      pytest 253/253.
 - [ ] **3d.1 Waking-up + spontaneous association** — the "feels human"
       proactivity track on 3c.0's machinery: waking-up situating brief on first
       interaction of a session/day, spontaneous association surfacing an
@@ -402,6 +423,14 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
   misses 3→0). Real local/LiteLLM models are seam-verified only (need
   onnxruntime+model download / network); bench + golden use the labeled stub.
   pytest 251/251.
+- **Testing-hardening pass (2026-06-12, pre-VERIFY.md):** A1 real `opencode acp`
+  binary verification DONE — the real binary (v1.17.4) was installed and drove
+  `AcpHand` through a full lifecycle in-sandbox; protocol-compatible, divergences
+  documented + the reasoning-chunk fidelity gap fixed. This flips VERIFY.md
+  step 3 ("real ACP coding task") from purely real-machine-pending to
+  **sandbox-verified** (a real model resolved here without a key); a real-machine
+  pass on the owner's own provider config is still the final confirmation.
+  pytest 253/253.
 - **North star v2 (Decision 14, ratified 2026-06-11 PT):** CENTRI is a
   **reasoning partner** — conversational seamlessness first-class, thinks like a
   human with machine superpowers (memory bandwidth, VM tool use, voice). Docs
