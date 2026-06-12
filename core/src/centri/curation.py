@@ -346,7 +346,7 @@ class Ranker:
             scored.append(ScoredCandidate(candidate=c, score=total, breakdown=bd))
         # Deterministic order: score desc, then created_at desc (recency is only a
         # tiebreak), then key asc to make ties total.
-        scored.sort(key=lambda s: (-s.score, _neg_str(s.candidate.created_at), s.candidate.key))
+        scored.sort(key=lambda s: (-s.score, -_ts_ordinal(s.candidate.created_at), s.candidate.key))
         return scored
 
     def _w_for(self, name: str) -> float:
@@ -381,9 +381,15 @@ class Ranker:
         }
 
 
-def _neg_str(s: str) -> Tuple[int, str]:
-    """Sort key that orders strings descending within an ascending sort."""
-    return (0, s)
+def _ts_ordinal(created_at: str) -> int:
+    """Deterministic integer ordinal of an ISO timestamp (digits only).
+
+    Used as the recency tiebreak in the ranker sort: larger == newer. No
+    wall-clock — purely a function of the stored string, so the ordering is
+    reproducible at any read time.
+    """
+    digits = re.sub(r"\D", "", created_at or "")[:14]
+    return int(digits) if digits else 0
 
 
 def _recency_score(created_at: str) -> float:
