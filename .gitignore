@@ -17,23 +17,50 @@ env/
 .env
 .env.*
 !.env.example
-
 # Databases
 *.db
 *.db-journal
 *.sqlite
 *.sqlite3
-
 # Node / Tauri (Phase 1 shell)
 node_modules/
 dist-ssr/
 *.local
 src-tauri/target/
 .tauri/
-
 # Editors / OS
 .DS_Store
 .idea/
 .vscode/
 *.swp
-.ruff_cache/
+node_modules
+.worktrees
+.sst
+.env.local
+.idea
+.vscode
+.codex
+*~
+playground
+tmp
+dist
+ts-dist
+.turbo
+**/.serena
+.serena/
+**/.omo
+.omo/
+/result
+refs
+Session.vim
+/opencode.json
+a.out
+target
+.scripts
+.direnv/
+# Local dev files
+opencode-dev
+UPCOMING_CHANGELOG.md
+logs/
+*.bun-build
+tsconfig.tsbuildinfo
