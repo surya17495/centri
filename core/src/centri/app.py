@@ -478,6 +478,87 @@ async def ingest_opencode(req: IngestOpenCodeRequest) -> Dict[str, Any]:
     return result
 
 
+@app.post("/events/import")
+async def events_import(req: EventImportRequest) -> Dict[str, Any]:
+    """Batch-import fork event envelopes into the spine (bridge-api §2).
+
+    Each envelope follows docs/event-contract.md (``type``, ``ts``, ``source``,
+    optional ``thread_id``/``task_id``/``repo_id``, ``payload``). Idempotent:
+    dedupe is on ``(source, payload.event_uid)`` via a deterministic event id
+    (``import:<source>:<event_uid>``) guarded by ``event_exists`` — re-posting a
+    batch imports nothing new. Redaction runs before persistence inside
+    ``db.append_event`` (the ledger is append-only, so a leaked secret would
+    persist forever). The ``centri_app.*`` family is accepted as-is. Imported
+    events are folded by consolidation on the next scheduler tick, exactly like
+    native events.
+
+    Returns ``{accepted, duplicates}``. Envelopes missing ``payload.event_uid``
+    cannot be deduped and are rejected (counted under ``rejected``) rather than
+    silently double-imported.
+    """
+    if runtime.db is None:
+        return {"available": False, "reason": "spine not booted", "accepted": 0, "duplicates": 0}
+
+    from datetime import datetime, timezone
+
+    accepted = 0
+    duplicates = 0
+    rejected = 0
+    now = datetime.now(timezone.utc).isoformat()
+
+    for env in req.events:
+        if not isinstance(env, dict):
+            rejected += 1
+            continue
+        payload = env.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
+        event_uid = payload.get("event_uid")
+        source = str(env.get("source") or "centri-app")
+        ev_type = str(env.get("type") or "")
+        if not event_uid or not ev_type:
+            # No stable identity to dedupe on (or no type) — never blind-import.
+            rejected += 1
+            continue
+
+        event_id = f"import:{source}:{event_uid}"
+        if await runtime.db.event_exists(event_id):
+            duplicates += 1
+            continue
+
+        ts = str(env.get("ts") or now)
+        thread_id = env.get("thread_id")
+        task_id = env.get("task_id")
+        repo_id = env.get("repo_id")
+        importance = str(env.get("importance") or "low")
+        await runtime.db.append_event(
+            event_id=event_id,
+            type=ev_type,
+            source=source,
+            ts=ts,
+            thread_id=thread_id,
+            task_id=task_id,
+            repo_id=repo_id,
+            importance=importance,
+            payload=payload,
+        )
+        accepted += 1
+        if runtime.event_bus:
+            # Fan out so the live timeline reflects the import. The bus redacts the
+            # whole event before client delivery (event-contract Redaction §).
+            await runtime.event_bus.publish({
+                "id": event_id,
+                "type": ev_type,
+                "source": source,
+                "ts": ts,
+                "thread_id": thread_id,
+                "task_id": task_id,
+                "repo_id": repo_id,
+                "payload": payload,
+            })
+
+    return {"accepted": accepted, "duplicates": duplicates, "rejected": rejected}
+
+
 @app.post("/memory/embeddings/backfill")
 async def embeddings_backfill() -> Dict[str, Any]:
     """Idempotently compute write-time vectors for existing graph nodes (Unit 2).

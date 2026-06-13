@@ -712,3 +712,91 @@ class TestBridgeRecall:
         from centri.app import app
         with TestClient(app) as client:
             assert client.post("/memory/recall", json={"cue": "hi"}).status_code == 200
+
+
+class TestBridgeImport:
+    """bridge-api §2: POST /events/import folds fork envelopes onto the spine.
+
+    Idempotent on (source, payload.event_uid); redaction runs before
+    persistence; the ``centri_app.*`` family is accepted as-is.
+    """
+
+    def _env(self, event_uid, *, type="centri_app.note", source="fork", payload=None, thread_id=None):
+        body = {"event_uid": event_uid}
+        body.update(payload or {})
+        env = {
+            "type": type,
+            "ts": "2026-06-13T00:00:00+00:00",
+            "source": source,
+            "payload": body,
+        }
+        if thread_id is not None:
+            env["thread_id"] = thread_id
+        return env
+
+    async def test_import_then_reimport_is_idempotent(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        import uuid
+        # Unique uids per run: the runtime DB is process-shared across TestClient
+        # lifespans, so fixed ids would already be present from a prior test.
+        u1, u2 = f"u-{uuid.uuid4().hex[:8]}", f"u-{uuid.uuid4().hex[:8]}"
+        with TestClient(app) as client:
+            batch = {"events": [self._env(u1), self._env(u2)]}
+            first = client.post("/events/import", json=batch).json()
+            assert first["accepted"] == 2
+            assert first["duplicates"] == 0
+            # Re-posting the same batch imports nothing new — dedupe on
+            # (source, event_uid) via the deterministic import:<source>:<uid> id.
+            second = client.post("/events/import", json=batch).json()
+            assert second["accepted"] == 0
+            assert second["duplicates"] == 2
+
+    async def test_import_accepts_centri_app_family_and_lands_on_spine(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        import uuid
+        uid = f"land-{uuid.uuid4().hex[:8]}"
+        th = f"th-{uuid.uuid4().hex[:8]}"
+        with TestClient(app) as client:
+            r = client.post(
+                "/events/import",
+                json={"events": [self._env(uid, type="centri_app.message", thread_id=th)]},
+            ).json()
+            assert r["accepted"] == 1
+            # The imported event is retrievable on the ledger via GET /events.
+            # Filter by the per-import thread so retrieval is isolated from the
+            # many events the process-shared runtime DB accumulates across tests.
+            events = client.get("/events", params={"thread_id": th}).json()["events"]
+            mine = [e for e in events if e.get("id") == f"import:fork:{uid}"]
+            assert mine, "imported event must be retrievable on the spine"
+            assert mine[0]["type"] == "centri_app.message"
+
+    async def test_import_redacts_secrets_before_persistence(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        from centri.redaction import REDACTED
+        import json as _json
+        import uuid
+        uid = f"secret-{uuid.uuid4().hex[:8]}"
+        th = f"th-{uuid.uuid4().hex[:8]}"
+        env = self._env(
+            uid, payload={"api_key": "sk-supersecretvalue123456", "note": "hi"}, thread_id=th
+        )
+        with TestClient(app) as client:
+            assert client.post("/events/import", json={"events": [env]}).json()["accepted"] == 1
+            events = client.get("/events", params={"thread_id": th}).json()["events"]
+            mine = [e for e in events if e.get("id") == f"import:fork:{uid}"]
+            assert mine
+            blob = _json.dumps(mine[0])
+            assert "supersecretvalue" not in blob
+            assert REDACTED in blob
+
+    async def test_import_rejects_envelope_missing_event_uid(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        bad = {"type": "centri_app.note", "source": "fork", "payload": {"note": "no uid"}}
+        with TestClient(app) as client:
+            r = client.post("/events/import", json={"events": [bad]}).json()
+            assert r["accepted"] == 0
+            assert r["rejected"] == 1
