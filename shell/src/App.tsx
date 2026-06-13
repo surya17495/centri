@@ -111,7 +111,7 @@ export default function App() {
             </div>
           )}
           <div className="min-h-0 flex-1">
-            <Timeline items={timeline} onResolve={resolveApproval} />
+            <Timeline items={timeline} status={status} onResolve={resolveApproval} />
           </div>
           <CommandBar threadId={activeThreadId} onSent={refreshThreads} />
         </main>

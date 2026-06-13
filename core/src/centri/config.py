@@ -75,6 +75,8 @@ class Settings:
     # well-known default ~/.claude, Cursor state.vscdb, opencode.db locations, so
     # these are only needed when a store lives somewhere unusual.
     ingest_opencode_paths: str = ""
+    ingest_hermes_paths: str = ""
+    ingest_mempalace_paths: str = ""
     ingest_claude_code_paths: str = ""
     ingest_cursor_paths: str = ""
     ingest_disabled_agents: str = ""
@@ -213,6 +215,8 @@ class Settings:
             opencode_cli=os.getenv("OPENCODE_CLI", "opencode"),
             opencode_ingest_db=os.getenv("CENTRI_OPENCODE_INGEST_DB", ""),
             ingest_opencode_paths=os.getenv("CENTRI_INGEST_OPENCODE_PATHS", ""),
+            ingest_hermes_paths=os.getenv("CENTRI_INGEST_HERMES_PATHS", ""),
+            ingest_mempalace_paths=os.getenv("CENTRI_INGEST_MEMPALACE_PATHS", ""),
             ingest_claude_code_paths=os.getenv("CENTRI_INGEST_CLAUDE_CODE_PATHS", ""),
             ingest_cursor_paths=os.getenv("CENTRI_INGEST_CURSOR_PATHS", ""),
             ingest_disabled_agents=os.getenv("CENTRI_INGEST_DISABLED_AGENTS", ""),

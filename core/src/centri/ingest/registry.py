@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 from centri.ingest.base import DiscoveredSource, MessageAdapter
 from centri.ingest.claude_code import ClaudeCodeIngestor
 from centri.ingest.cursor import CursorIngestor
+from centri.ingest.hal_jsonl import HermesIngestor, MempalaceIngestor
 from centri.ingest.opencode import OpenCodeIngestor
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,8 @@ def _now() -> str:
 # Adapter classes by agent name; order is the discovery / bootstrap order.
 _ADAPTER_CLASSES = {
     "opencode": OpenCodeIngestor,
+    "hermes": HermesIngestor,
+    "mempalace": MempalaceIngestor,
     "claude_code": ClaudeCodeIngestor,
     "cursor": CursorIngestor,
 }

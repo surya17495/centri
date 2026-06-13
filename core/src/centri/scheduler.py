@@ -62,8 +62,13 @@ class Scheduler:
         self._llm_idle_ticks = 0
         self._task: Optional[asyncio.Task] = None
         self._interval = 30.0
-        # High-water mark: only consolidate events newer than this timestamp.
+        # Deterministic consolidation can embed one vector per hinted event. Keep
+        # each scheduler tick bounded so a large import backlog cannot monopolize
+        # the async server loop.
+        self._consolidation_batch = 8
+        # High-water mark: only consolidate events after this (ts, id) cursor.
         self._last_consolidated_ts: str = ""
+        self._last_consolidated_id: str = ""
 
     async def start(self) -> None:
         logger.info("Scheduler starting")
@@ -143,20 +148,19 @@ class Scheduler:
         import json
 
         try:
-            rows = await self._db.recent_events(limit=5000)
+            rows = await self._db.events_after(
+                after_ts=self._last_consolidated_ts,
+                after_id=self._last_consolidated_id,
+                limit=self._consolidation_batch,
+            )
         except Exception:
             logger.debug("Consolidation event read failed", exc_info=True)
             return 0
 
-        # recent_events is newest-first; replay oldest-first and skip anything at
-        # or before the high-water mark.
-        rows = list(reversed(rows))
+        # events_after is oldest-first and already bounded to the work this tick.
         fresh: List[dict] = []
-        newest_ts = self._last_consolidated_ts
         for row in rows:
             ts = row.get("ts") or ""
-            if self._last_consolidated_ts and ts <= self._last_consolidated_ts:
-                continue
             raw = row.get("payload_json")
             try:
                 payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
@@ -168,13 +172,23 @@ class Scheduler:
                     "type": row.get("type"),
                     "repo_id": row.get("repo_id"),
                     "payload": payload,
+                    "_ts": ts,
                 }
             )
-            if ts > newest_ts:
-                newest_ts = ts
 
         if not fresh:
             return 0
+
+        # The query above is already capped. Draining a bounded batch per tick
+        # advances the high-water mark gradually and keeps the server responsive.
+        newest_ts = self._last_consolidated_ts
+        newest_id = self._last_consolidated_id
+        for ev in fresh:
+            ts = ev.pop("_ts", "") or ""
+            eid = str(ev.get("id") or "")
+            if (ts, eid) > (newest_ts, newest_id):
+                newest_ts = ts
+                newest_id = eid
         # Stage unhinted events for the LLM tier before the deterministic fold so
         # the two tiers see the same window; the deterministic tier still ignores
         # unhinted events (it only reads hints).
@@ -186,6 +200,7 @@ class Scheduler:
                     self._llm_backlog.append(ev)
         written = await self._consolidator.consume_events(fresh)
         self._last_consolidated_ts = newest_ts
+        self._last_consolidated_id = newest_id
         return written
 
     async def run_llm_consolidation(self) -> dict:

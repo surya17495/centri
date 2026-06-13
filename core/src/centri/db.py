@@ -233,6 +233,31 @@ class Database:
             )
         return [dict(row) for row in cur.fetchall()]
 
+    async def events_after(
+        self,
+        after_ts: str = "",
+        after_id: str = "",
+        limit: int = 100,
+        tenant_id: str = DEFAULT_TENANT,
+    ) -> List[Dict[str, Any]]:
+        """Return the next spine events after a timestamp, oldest first.
+
+        Scheduler consolidation needs a bounded forward scan. Using recent_events()
+        would fetch newest-first and can skip older imported rows when the backlog is
+        larger than the fetch limit.
+        """
+        if after_ts:
+            cur = await self._execute(
+                "SELECT * FROM events WHERE tenant_id = ? AND (ts > ? OR (ts = ? AND id > ?)) ORDER BY ts ASC, id ASC LIMIT ?",
+                (tenant_id, after_ts, after_ts, after_id, limit),
+            )
+        else:
+            cur = await self._execute(
+                "SELECT * FROM events WHERE tenant_id = ? ORDER BY ts ASC, id ASC LIMIT ?",
+                (tenant_id, limit),
+            )
+        return [dict(row) for row in cur.fetchall()]
+
     # threads
     async def create_thread(
         self,

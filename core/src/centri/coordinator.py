@@ -277,7 +277,7 @@ class Coordinator:
     ) -> CoordinatorResponse:
         # Voice greeting is a special path
         if text == "__voice_greeting__":
-            greeting = self._mr.narrate("Greet the user and offer your assistance.", voice=True)
+            greeting = await asyncio.to_thread(self._mr.narrate, "Greet the user and offer your assistance.", True)
             await self._narrate(greeting)
             return CoordinatorResponse(response_type="greeting", message=greeting)
 
@@ -314,7 +314,7 @@ class Coordinator:
             )
             self._pending_session_brief = None
 
-        intent = self._classify_intent(text, packet)
+        intent = await asyncio.to_thread(self._classify_intent, text, packet)
 
         # 3c.0.2 — universal per-turn curation. EVERY chat turn flows through the
         # same pure curate() Curator path as coding delegation (Decision 13:
@@ -521,7 +521,7 @@ class Coordinator:
         running = await self._db.list_tasks(status="running")
         blockers: list[str] = packet.constraints if packet.constraints else []
         ctx_str = self._packet_summary(packet)
-        message = self._mr.summarize_status(ctx_str)
+        message = await asyncio.to_thread(self._mr.summarize_status, ctx_str)
         await self._db.append_event(
             event_id=f"{event_id}-status",
             type="coordinator.status",
@@ -608,7 +608,7 @@ class Coordinator:
             context=packet,
         )
         result = await self._hands.execute(handoff)
-        narration = self._mr.narrate(result.summary)
+        narration = await asyncio.to_thread(self._mr.narrate, result.summary)
         return CoordinatorResponse(response_type="steering", message=narration, data={"summary": result.summary})
 
     # ------------------------------------------------------------------
@@ -692,7 +692,7 @@ class Coordinator:
             repo_id=repo_id,
             payload={"description": text, "status": "running"},
         )
-        narration = self._mr.narrate(f"Started task: {text}.")
+        narration = await asyncio.to_thread(self._mr.narrate, f"Started task: {text}.")
         return CoordinatorResponse(
             response_type="task_created",
             message=narration,
@@ -967,7 +967,9 @@ class Coordinator:
         recall = [r for r in (packet.relevant_recall or []) if r]
         if recall:
             context += "\nMemory:\n" + "\n".join(recall)
-        reply = self._mr.reason(f"User said: {text}\nContext: {context}\nReply concisely.", output_schema=None)
+        reply = await asyncio.to_thread(
+            self._mr.reason, f"User said: {text}\nContext: {context}\nReply concisely.", None
+        )
         return CoordinatorResponse(response_type="info", message=reply or "I'm here.")
 
     # ------------------------------------------------------------------

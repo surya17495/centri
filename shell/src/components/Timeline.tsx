@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react";
-import type { TimelineItem } from "../types";
+import { useEffect, useRef, useState } from "react";
+import type { StatusResponse, TimelineItem } from "../types";
 import { TaskCard } from "./TaskCard";
 import { ApprovalCard } from "./ApprovalCard";
 import { Logo } from "./Logo";
@@ -28,6 +28,20 @@ function RawEvent({ item }: { item: Extract<TimelineItem, { kind: "event" }> }) 
   );
 }
 
+function shouldHideEvent(item: TimelineItem): boolean {
+  if (item.kind !== "event") return false;
+  const type = item.event.type ?? "";
+  return (
+    type.startsWith("curation.") ||
+    type === "memory.recall" ||
+    type === "context.updated" ||
+    type.startsWith("brief.") ||
+    type === "ingest.opencode.message" ||
+    type === "ingest.hermes.message" ||
+    type === "ingest.mempalace.message"
+  );
+}
+
 function UserMessage({ text }: { text: string }) {
   return (
     <div className="flex justify-end">
@@ -39,12 +53,60 @@ function UserMessage({ text }: { text: string }) {
 }
 
 function AssistantMessage({ text }: { text: string }) {
+  const looksLikeToolDump = /<bash>|<\/bash>|^\s*(find|grep|curl|python|npm|git|docker)\b/m.test(text);
+  const [expanded, setExpanded] = useState(!looksLikeToolDump);
   return (
     <div className="flex gap-3">
       <span className="mt-0.5 shrink-0 text-ink-faint">
         <Logo size={16} />
       </span>
-      <div className="max-w-[85%] text-sm leading-relaxed text-ink">{text}</div>
+      <div className="max-w-[85%] text-sm leading-relaxed text-ink">
+        {looksLikeToolDump && !expanded ? (
+          <div className="rounded-xl border border-white/[0.08] bg-white/[0.035] px-3 py-2.5">
+            <div className="text-ink">Ran a background tool step.</div>
+            <button
+              onClick={() => setExpanded(true)}
+              className="mt-1 text-xs text-ink-dim underline decoration-white/20 underline-offset-4 hover:text-ink"
+            >
+              Show command output
+            </button>
+          </div>
+        ) : (
+          <>
+            {text}
+            {looksLikeToolDump && (
+              <button
+                onClick={() => setExpanded(false)}
+                className="ml-2 text-xs text-ink-dim underline decoration-white/20 underline-offset-4 hover:text-ink"
+              >
+                Hide output
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ActivityCard({ status }: { status: StatusResponse | null | undefined }) {
+  const running = status?.running_tasks ?? 0;
+  const pending = status?.pending_approvals ?? 0;
+  if (running === 0 && pending === 0) return null;
+  const waiting = pending > 0;
+  return (
+    <div className="animate-rise-in pl-7">
+      <div className="glass rounded-xl border border-accent/15 p-4">
+        <div className="flex items-center gap-2 text-sm font-medium text-ink">
+          <span className={`h-2 w-2 rounded-full ${waiting ? "bg-amber-400" : "bg-accent animate-pulse"}`} aria-hidden />
+          {waiting ? "Waiting for your approval" : "Working in the background"}
+        </div>
+        <p className="mt-1.5 text-xs leading-relaxed text-ink-dim">
+          {running > 0 && `${running} task${running === 1 ? " is" : "s are"} running. `}
+          {pending > 0 && `${pending} approval${pending === 1 ? " is" : "s are"} pending. `}
+          Updates stream here as they complete; you can keep typing while CENTRI works.
+        </p>
+      </div>
     </div>
   );
 }
@@ -90,24 +152,28 @@ function EmptyState() {
 export function Timeline({
   items,
   onResolve,
+  status,
 }: {
   items: TimelineItem[];
   onResolve: (id: string, decision: "approve" | "reject") => Promise<void>;
+  status?: StatusResponse | null;
 }) {
   const endRef = useRef<HTMLDivElement>(null);
+  const visibleItems = items.filter((item) => !shouldHideEvent(item));
+  const hasActivity = (status?.running_tasks ?? 0) > 0 || (status?.pending_approvals ?? 0) > 0;
 
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ behavior: "smooth" });
   }, [items.length]);
 
-  if (items.length === 0) {
+  if (visibleItems.length === 0 && !hasActivity) {
     return <EmptyState />;
   }
 
   return (
     <div className="scrollbar-thin h-full overflow-y-auto">
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-8">
-        {items.map((item) => {
+        {visibleItems.map((item) => {
           switch (item.kind) {
             case "narration":
               return (
@@ -141,6 +207,7 @@ export function Timeline({
               return null;
           }
         })}
+        <ActivityCard status={status} />
         <div ref={endRef} />
       </div>
     </div>

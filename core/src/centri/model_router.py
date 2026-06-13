@@ -92,11 +92,13 @@ class ModelRouter:
             elif role == "reasoning":
                 model = "deepseek-ai/DeepSeek-V3"
             elif role == "embeddings":
-                model = "BAAI/bge-en-icl"
+                model = self._settings.embedding_model
             elif role == "vision":
                 model = "Qwen/Qwen2-VL-72B-Instruct"
             elif role == "narration":
                 model = "meta-llama/Llama-3.3-70B-Instruct"
+        if not model and role == "embeddings":
+            return ""
         if not model:
             model = "meta-llama/Llama-3.3-70B-Instruct"
         return model
@@ -256,6 +258,10 @@ class ModelRouter:
                 api_base=resolved.api_base,
                 max_tokens=kwargs.get("max_tokens", 4096),
                 temperature=kwargs.get("temperature", 0.5),
+                # Bound every call so a slow/unreachable provider can never hang a
+                # worker thread indefinitely (and, before threading, the loop).
+                timeout=kwargs.get("timeout", 45),
+                num_retries=0,
             )
             content = response.choices[0].message.content  # type: ignore[union-attr]
             return content.strip() if content else None
@@ -394,6 +400,8 @@ class ModelRouter:
                     input=texts_to_fetch,
                     api_key=resolved.api_key,
                     api_base=resolved.api_base,
+                    timeout=30,
+                    num_retries=0,
                 )
                 fetched: List[List[float]] = [item["embedding"] for item in response["data"]]  # type: ignore[index]
                 for t, emb in zip(texts_to_fetch, fetched):
