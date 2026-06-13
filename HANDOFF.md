@@ -524,6 +524,36 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
             (5) + README "Phase 4 tools slice" docs in the same commit. Coordinator
             intent routing was the cuttable item and is **not** wired (endpoints are
             the kept requirement). pytest 365 passed / 1 skipped.
+- [x] **Bridge API (Track A — fork↔core)** — DONE (2026-06-13). The three thin
+      HTTP endpoints the OpenCode app shell (packages/, Track B) calls into the
+      core memory plane, per `/home/user/workspace/contracts/bridge-api.md`. All
+      reuse existing machinery — pure `curate()`, the event spine + redaction,
+      bearer auth — with NO new memory features or schema changes.
+      (1) **POST /memory/recall** — per-turn cued brief: runs
+      `runtime.curator.assemble(cue, thread_id=, budget=)` (a thin `budget`
+      override added to `Curator.assemble` honors `budget_tokens`), returns
+      `{markdown, items[] (text/score/score_breakdown/source_event_id/kind),
+      ambient_items[], policy_version, graph_hwm, elapsed_ms}` via the pure
+      `_recall_response` mapper. `kind` = section→decision/convention/open_loop/fact.
+      Fails OPEN (unbooted plane → 200 with empty keys).
+      (2) **POST /events/import** — batch-import fork envelopes onto the spine,
+      idempotent on `(source, payload.event_uid)` via a deterministic
+      `import:<source>:<event_uid>` id guarded by `event_exists`; redaction runs
+      before persistence inside `append_event`; accepts the `centri_app.*` family
+      as-is; fans out on the bus. Returns `{accepted, duplicates, rejected}`
+      (`rejected` = envelopes with no `event_uid`/`type` — never blind-imported).
+      (3) **GET /memory/ambient.md** — the ambient standing layer as `text/plain`
+      markdown via `load_ambient().render(...)`; the auth middleware now also
+      honors a `?token=` query param (an instruction-URL fetcher can't set
+      headers), mirroring the WS `?token=` path. Deviations from the contract
+      logged in `bridge-api.md` → "Deviations (Track A)". Tests:
+      `test_centri.py::TestBridgeRecall` (4), `::TestBridgeImport` (4),
+      `::TestBridgeAmbient` (3). Commits `162df06` (recall), `662b960` (import),
+      `92e827a` (ambient). pytest 376 passed / 1 skipped (the 2 failing —
+      `TestBootstrap::test_discover_endpoint_shape`, `test_model_router::test_embed_
+      leaves_already_prefixed_model_unchanged` — are PRE-EXISTING sandbox-env
+      failures, not bridge code: the sandbox `~/.claude` has extra agents and the
+      installed litellm double-prefixes `openai/`).
 - [ ] **3d.1 Waking-up + spontaneous association** — the "feels human"
       proactivity track on 3c.0's machinery: waking-up situating brief on first
       interaction of a session/day, spontaneous association surfacing an
@@ -706,7 +736,18 @@ each step is run; any `no` keeps that demo claim hedged until it flips.
   `shell/`; set backend URL (and auth token if set) in Settings. DB:
   `~/.centri/state.db` — note pytest writes to it (pollutes dev timeline).
 - **Auth:** set `CENTRI_AUTH_TOKEN` → Bearer on REST (except `/health`),
-  `?token=` on WS. Empty = disabled (dev).
+  `?token=` on WS. The HTTP auth middleware ALSO accepts `?token=` as a fallback
+  when no bearer header is present (added for `GET /memory/ambient.md`, which a
+  fork instruction-URL fetcher loads via `<a href>`-style GET with no headers) —
+  same shared secret, applies to all routes. Empty = disabled (dev).
+- **Bridge API DONE (2026-06-13, Track A):** the three fork↔core endpoints
+  (`POST /memory/recall`, `POST /events/import`, `GET /memory/ambient.md`) are
+  implemented, tested, and pushed (`162df06`, `662b960`, `92e827a`). They reuse
+  pure `curate()`, the event spine + redaction, and bearer auth — no new memory
+  features or schema changes. Contract + deviations:
+  `/home/user/workspace/contracts/bridge-api.md`. pytest 376 passed / 1 skipped
+  (2 pre-existing sandbox-env failures unrelated to the bridge). Track B owns the
+  fork side (`packages/`, the `client.ts` / GlobalBus tap / instruction-URL wiring).
 
 ## Contracts you must not break
 
