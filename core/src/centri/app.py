@@ -55,6 +55,21 @@ class ToolInvokeRequest(BaseModel):
     thread_id: str | None = None
 
 
+class RecallRequest(BaseModel):
+    # Per-turn cued recall (bridge-api §1). The cue is the user message plus any
+    # active file paths; budget_tokens overrides the configured brief budget.
+    cue: str
+    thread_id: str | None = None
+    budget_tokens: int | None = None
+    format: str = "markdown+items"
+
+
+class EventImportRequest(BaseModel):
+    # Batch of event-contract envelopes from the fork (bridge-api §2). Idempotent
+    # on (source, payload.event_uid); redaction runs before persistence.
+    events: list[dict]
+
+
 class ContextRequest(BaseModel):
     surface: str | None = None
     title: str | None = None
@@ -309,6 +324,88 @@ async def get_memory_graph() -> Dict[str, Any]:
         "facts": [f.__dict__ for f in facts],
         "open_loops": [loop.__dict__ for loop in loops],
     }
+
+
+_KIND_OF_SECTION = {
+    "decisions": "decision",
+    "rejections": "decision",
+    "conventions": "convention",
+    "open_loops": "open_loop",
+}
+
+
+def _recall_response(brief: Any, elapsed_ms: int) -> Dict[str, Any]:
+    """Shape a :class:`CuratedBrief` into the bridge-api §1 recall envelope.
+
+    Pure mapping (no I/O) so it is unit-testable without the running app: every
+    cued line becomes an item with its score breakdown + ``source_event_id``
+    receipt and a coarse ``kind``; the ambient standing layer is flattened into
+    ``ambient_items``.
+    """
+    items = [
+        {
+            "text": ln.text,
+            "score": ln.score,
+            "score_breakdown": ln.breakdown,
+            "source_event_id": ln.source_event_id,
+            "kind": _KIND_OF_SECTION.get(ln.section, "fact"),
+        }
+        for ln in brief.lines
+    ]
+    amb = brief.ambient
+    ambient_items = list(amb.identity) + list(amb.active_projects) + list(amb.open_loops)
+    if amb.narrative:
+        ambient_items.append(amb.narrative)
+    return {
+        "markdown": brief.render(),
+        "items": items,
+        "ambient_items": ambient_items,
+        "policy_version": brief.policy_version,
+        "graph_hwm": brief.graph_high_water,
+        "elapsed_ms": elapsed_ms,
+    }
+
+
+@app.post("/memory/recall")
+async def memory_recall(req: RecallRequest) -> Dict[str, Any]:
+    """Per-turn cued brief (bridge-api §1) — runs the pure ``curate()``.
+
+    The fork posts the user message (plus any active file paths) as ``cue`` and
+    gets back the rendered markdown brief plus structured ``items`` (each with a
+    score breakdown + ``source_event_id`` receipt) and the ambient standing layer,
+    stamped with ``policy_version`` and the graph high-water. No LLM at read time;
+    the same graph + cue + budget renders the byte-identical brief. The fork fails
+    OPEN, so an unbooted memory plane returns an empty brief, never an error.
+    """
+    import time
+
+    from centri.curation import Budget
+
+    started = time.perf_counter()
+    if runtime.curator is None or runtime.memory_graph is None:
+        return {
+            "markdown": "",
+            "items": [],
+            "ambient_items": [],
+            "policy_version": "",
+            "graph_hwm": "",
+            "elapsed_ms": 0,
+        }
+
+    budget = None
+    if req.budget_tokens is not None and req.budget_tokens > 0:
+        base = Budget.from_settings(get_settings())
+        budget = Budget(
+            total=req.budget_tokens,
+            ambient=min(base.ambient, req.budget_tokens),
+            floor_decisions=min(base.floor_decisions, req.budget_tokens),
+            floor_rejections=min(base.floor_rejections, req.budget_tokens),
+        )
+
+    brief, _candidates, _cue = await runtime.curator.assemble(
+        req.cue, thread_id=req.thread_id, budget=budget
+    )
+    return _recall_response(brief, int((time.perf_counter() - started) * 1000))
 
 
 @app.get("/memory/since")

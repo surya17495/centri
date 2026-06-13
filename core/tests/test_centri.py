@@ -613,3 +613,102 @@ class TestTools:
             assert client.post("/tools/invoke", json={"name": "TAVILY_SEARCH"}).status_code == 401
             ok = client.get("/tools", headers={"Authorization": "Bearer s3cret"})
             assert ok.status_code == 200
+
+
+class TestBridgeRecall:
+    """bridge-api §1: POST /memory/recall runs the pure curate() read path."""
+
+    async def test_recall_shape_and_stamp(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app, runtime
+        with TestClient(app) as client:
+            r = client.post(
+                "/memory/recall", json={"cue": "where did we leave off"}
+            ).json()
+            # Contract shape — all keys present even on an empty graph.
+            for k in ("markdown", "items", "ambient_items", "policy_version", "graph_hwm", "elapsed_ms"):
+                assert k in r, k
+            assert isinstance(r["items"], list)
+            assert isinstance(r["ambient_items"], list)
+            assert r["policy_version"] == runtime.curator._policy_version
+            assert isinstance(r["elapsed_ms"], int)
+
+    async def _fresh_curator(self):
+        # The endpoint shapes its response from curator.assemble() + the pure
+        # _recall_response mapper. Driving them on a fresh DB (rather than the
+        # TestClient's portal-thread DB) seeds graph state deterministically and
+        # tests the exact code path the endpoint uses.
+        from centri.curation import Curator
+        from centri.memory_graph import MemoryGraph
+        tmpdir = tempfile.mkdtemp()
+        db = Database(Path(tmpdir) / "state.db")
+        graph = MemoryGraph(db)
+        await graph.ensure_tables()
+        return db, graph, Curator(graph, settings=Settings())
+
+    async def test_recall_surfaces_a_seeded_decision_with_receipt(self):
+        from centri.app import _recall_response
+        from centri.memory_graph import Decision
+        import uuid
+        db, graph, curator = await self._fresh_curator()
+        try:
+            topic = f"funding-signal-{uuid.uuid4().hex[:6]}"
+            await graph.add_decision(
+                Decision(
+                    id=f"d-{uuid.uuid4().hex[:8]}",
+                    topic=topic,
+                    statement=f"use EWMA smoothing for {topic}",
+                    source_event_id="evt-seed-1",
+                    created_at=_now(),
+                    tags=["test"],
+                )
+            )
+            brief, _c, _cue = await curator.assemble(f"remind me about {topic} EWMA smoothing")
+            r = _recall_response(brief, 0)
+            hit = [it for it in r["items"] if topic in it["text"]]
+            assert hit, r["items"]
+            it = hit[0]
+            assert it["kind"] == "decision"
+            assert it["source_event_id"] == "evt-seed-1"
+            assert "overlap" in it["score_breakdown"]
+            assert topic in r["markdown"]
+        finally:
+            await db.close()
+
+    async def test_recall_budget_tokens_caps_the_brief(self):
+        from centri.app import _recall_response
+        from centri.curation import Budget
+        from centri.memory_graph import Fact
+        import uuid
+        db, graph, curator = await self._fresh_curator()
+        try:
+            for i in range(8):
+                await graph.add_fact(
+                    Fact(
+                        id=f"f-{uuid.uuid4().hex[:8]}",
+                        topic=f"conv-budget-{i}",
+                        statement="prefer explicit configuration over magic defaults everywhere",
+                        source_event_id=f"evt-b-{i}",
+                        created_at=_now(),
+                        tags=["convention"],
+                    )
+                )
+            tiny_b, _c, _cue = await curator.assemble(
+                "prefer explicit configuration", budget=Budget(total=30, ambient=10)
+            )
+            big_b, _c2, _cue2 = await curator.assemble(
+                "prefer explicit configuration", budget=Budget(total=900)
+            )
+            tiny = _recall_response(tiny_b, 0)
+            big = _recall_response(big_b, 0)
+            assert len(tiny["items"]) < len(big["items"])
+        finally:
+            await db.close()
+
+    async def test_recall_fails_open_without_auth_token(self):
+        # No CENTRI_AUTH_TOKEN in the default test env => route is reachable and
+        # returns a brief (fork fails OPEN, never 401 in dev).
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            assert client.post("/memory/recall", json={"cue": "hi"}).status_code == 200

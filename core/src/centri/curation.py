@@ -1267,6 +1267,7 @@ class Curator:
         recent_turns: Optional[Sequence[str]] = None,
         active_files: Optional[Sequence[str]] = None,
         active_task: Optional[str] = None,
+        budget: Optional[Budget] = None,
     ) -> Tuple[CuratedBrief, List[Candidate], Cue]:
         cue = await self._cue_builder.build(
             utterance,
@@ -1285,7 +1286,7 @@ class Curator:
         brief = await curate(
             self._graph,
             cue,
-            budget=self._budget,
+            budget=budget or self._budget,
             weights=self._weights,
             policy_version=self._policy_version,
             repo_id=repo_id,
