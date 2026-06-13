@@ -12,6 +12,7 @@ import PROMPT_KIMI from "./prompt/kimi.txt"
 
 import PROMPT_CODEX from "./prompt/codex.txt"
 import PROMPT_TRINITY from "./prompt/trinity.txt"
+import PROMPT_CENTRI from "./prompt/centri.txt" // CENTRI
 import type { Provider } from "@/provider/provider"
 import type { Agent } from "@/agent/agent"
 import { Permission } from "@/permission"
@@ -23,6 +24,12 @@ import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { Reference } from "@opencode-ai/core/reference"
 
 export function provider(model: Provider.Model) {
+  // CENTRI: append the Centri identity as an ADDITIONAL system entry for every
+  // provider; provider-native prompts are preserved, not replaced.
+  return [...providerPrompts(model), PROMPT_CENTRI]
+}
+
+function providerPrompts(model: Provider.Model) {
   if (model.api.id.includes("gpt-4") || model.api.id.includes("o1") || model.api.id.includes("o3"))
     return [PROMPT_BEAST]
   if (model.api.id.includes("gpt")) {
