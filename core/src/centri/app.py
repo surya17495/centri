@@ -12,7 +12,7 @@ from typing import Any, Dict
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from centri.config import get_settings
@@ -118,7 +118,11 @@ async def _auth_middleware(request: Request, call_next):
     # OPTIONS preflights never carry credentials; CORS middleware answers them.
     if request.method == "OPTIONS" or request.url.path in _PUBLIC_PATHS:
         return await call_next(request)
-    if not _token_ok(_bearer(request.headers.get("authorization"))):
+    # Bearer header is the norm; a ?token= query param is also honored (some
+    # surfaces — e.g. an <a href> to /memory/ambient.md, like the WebSocket
+    # handshake — cannot set headers). Same shared secret either way.
+    token = _bearer(request.headers.get("authorization")) or request.query_params.get("token")
+    if not _token_ok(token):
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
     return await call_next(request)
 
@@ -406,6 +410,27 @@ async def memory_recall(req: RecallRequest) -> Dict[str, Any]:
         req.cue, thread_id=req.thread_id, budget=budget
     )
     return _recall_response(brief, int((time.perf_counter() - started) * 1000))
+
+
+@app.get("/memory/ambient.md", response_class=PlainTextResponse)
+async def memory_ambient_md(repo_id: str | None = None) -> str:
+    """Ambient standing-context layer as plain markdown (bridge-api §3).
+
+    The consolidation-maintained ambient digest (identity/conventions, active
+    projects, top open loops, narrative) read straight from the graph — the same
+    layer the curated brief prepends. Served as ``text/plain`` so it drops into a
+    fork system prompt verbatim. Auth accepts the shared secret as a ``?token=``
+    query param in addition to the bearer header (an <a href> cannot set headers).
+    Fails OPEN: an unbooted memory plane yields an empty body, never an error.
+    """
+    from centri.curation import load_ambient
+
+    if runtime.memory_graph is None:
+        return ""
+    ambient = await load_ambient(runtime.memory_graph, repo_id=repo_id)
+    # A large budget so the standing layer renders in full here (the brief trims
+    # it to fit a turn; this endpoint is the unabridged source).
+    return ambient.render(100_000)
 
 
 @app.get("/memory/since")

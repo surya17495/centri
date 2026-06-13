@@ -800,3 +800,66 @@ class TestBridgeImport:
             r = client.post("/events/import", json={"events": [bad]}).json()
             assert r["accepted"] == 0
             assert r["rejected"] == 1
+
+
+class TestBridgeAmbient:
+    """bridge-api §3: GET /memory/ambient.md serves the standing layer as text."""
+
+    async def test_ambient_md_is_plaintext_and_200(self):
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            resp = client.get("/memory/ambient.md")
+            assert resp.status_code == 200
+            assert resp.headers["content-type"].startswith("text/plain")
+            assert isinstance(resp.text, str)
+
+    async def test_ambient_render_surfaces_seeded_digest(self):
+        # The endpoint body is load_ambient(graph).render(...); driving that pair on
+        # a fresh graph (rather than the process-shared runtime DB) seeds the
+        # reserved ambient Fact deterministically and exercises the exact path.
+        import json as _json
+        from centri.curation import AMBIENT_TAG, AMBIENT_TOPIC, load_ambient
+        from centri.memory_graph import Fact, MemoryGraph
+        tmpdir = tempfile.mkdtemp()
+        db = Database(Path(tmpdir) / "state.db")
+        graph = MemoryGraph(db)
+        await graph.ensure_tables()
+        try:
+            await graph.add_fact(
+                Fact(
+                    id="amb",
+                    topic=AMBIENT_TOPIC,
+                    statement=_json.dumps(
+                        {"identity": ["surya, founder"], "active_projects": ["centri"]}
+                    ),
+                    source_event_id="evt-amb",
+                    created_at=_now(),
+                    tags=[AMBIENT_TAG],
+                )
+            )
+            ambient = await load_ambient(graph)
+            assert not ambient.is_empty()
+            md = ambient.render(100_000)
+            assert "surya, founder" in md
+            assert "centri" in md
+        finally:
+            await db.close()
+
+    async def test_ambient_md_accepts_token_query_param(self, monkeypatch):
+        # With a token configured, ?token= is honored (an <a href> cannot set the
+        # Authorization header) — same shared secret as the bearer path.
+        import centri.config as config_module
+        monkeypatch.setattr(config_module, "_settings", Settings(auth_token="s3cret"))
+        from fastapi.testclient import TestClient
+        from centri.app import app
+        with TestClient(app) as client:
+            assert client.get("/memory/ambient.md").status_code == 401
+            assert client.get("/memory/ambient.md", params={"token": "wrong"}).status_code == 401
+            ok = client.get("/memory/ambient.md", params={"token": "s3cret"})
+            assert ok.status_code == 200
+            # Bearer header still works too.
+            hdr = client.get(
+                "/memory/ambient.md", headers={"Authorization": "Bearer s3cret"}
+            )
+            assert hdr.status_code == 200
