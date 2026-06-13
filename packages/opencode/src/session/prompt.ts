@@ -60,6 +60,7 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
+import { Centri } from "@/centri/client" // CENTRI
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -1331,6 +1332,17 @@ export const layer = Layer.effect(
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
             const system = [...env, ...instructions, ...(skills ? [skills] : [])]
+            // CENTRI: per-turn cued recall. On the first LLM call of a user turn,
+            // ask the memory core for a brief and append it to this turn's system
+            // array. Fail-open — any failure (disabled/slow/dead core) leaves the
+            // turn untouched.
+            if (step === 1) {
+              const cue = centriCue(lastUserMsg)
+              if (cue) {
+                const brief = yield* Effect.promise(() => Centri.recall(cue, { threadID: sessionID }))
+                if (brief?.markdown.trim()) system.push(brief.markdown)
+              }
+            }
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             const result = yield* handle.process({
@@ -1678,6 +1690,22 @@ export function createStructuredOutputTool(input: {
     },
   })
 }
+// CENTRI: build a recall cue from the last user message — visible text plus any
+// attached file paths. Returns undefined when there's nothing to recall on.
+function centriCue(message: SessionV1.WithParts | undefined): string | undefined {
+  if (!message) return undefined
+  const text = message.parts
+    .filter((p): p is SessionV1.TextPart => p.type === "text" && !p.synthetic && !p.ignored)
+    .map((p) => p.text)
+    .join("\n")
+    .trim()
+  const files = message.parts
+    .filter((p): p is SessionV1.FilePart => p.type === "file" && !!p.filename)
+    .map((p) => p.filename!)
+  const cue = [text, files.length ? `Active files: ${files.join(", ")}` : ""].filter(Boolean).join("\n").trim()
+  return cue || undefined
+}
+
 const bashRegex = /!`([^`]+)`/g
 // Match [Image N] as single token, quoted strings, or non-space sequences
 const argsRegex = /(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi
