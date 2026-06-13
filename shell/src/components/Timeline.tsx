@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import type { StatusResponse, TimelineItem } from "../types";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { api } from "../api";
+import type { PendingApproval, StatusResponse, TimelineItem } from "../types";
 import { TaskCard } from "./TaskCard";
 import { ApprovalCard } from "./ApprovalCard";
 import { Logo } from "./Logo";
@@ -34,12 +35,69 @@ function shouldHideEvent(item: TimelineItem): boolean {
   return (
     type.startsWith("curation.") ||
     type === "memory.recall" ||
+    type === "memory.synthesized" ||
+    type.startsWith("consolidation.") ||
+    type.startsWith("embedding.") ||
     type === "context.updated" ||
     type.startsWith("brief.") ||
     type === "ingest.opencode.message" ||
     type === "ingest.hermes.message" ||
     type === "ingest.mempalace.message"
   );
+}
+
+function inline(text: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  parts.forEach((part, i) => {
+    if (!part) return;
+    if (part.startsWith("**") && part.endsWith("**")) {
+      nodes.push(<strong key={i} className="font-semibold text-ink">{part.slice(2, -2)}</strong>);
+    } else if (part.startsWith("`") && part.endsWith("`")) {
+      nodes.push(<code key={i} className="rounded bg-white/[0.07] px-1 py-0.5 font-mono text-[0.85em] text-ink">{part.slice(1, -1)}</code>);
+    } else {
+      nodes.push(part);
+    }
+  });
+  return nodes;
+}
+
+function RichText({ text }: { text: string }) {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const blocks: ReactNode[] = [];
+  let bullets: string[] = [];
+
+  function flushBullets() {
+    if (bullets.length === 0) return;
+    const items = bullets;
+    bullets = [];
+    blocks.push(
+      <ul key={`ul-${blocks.length}`} className="my-2 list-disc space-y-1 pl-5 text-ink-dim">
+        {items.map((line, i) => <li key={i}>{inline(line)}</li>)}
+      </ul>,
+    );
+  }
+
+  lines.forEach((raw) => {
+    const line = raw.trim();
+    if (!line) {
+      flushBullets();
+      return;
+    }
+    const bullet = line.match(/^[-*]\s+(.+)/);
+    if (bullet) {
+      bullets.push(bullet[1]);
+      return;
+    }
+    flushBullets();
+    if (line.startsWith("## ")) {
+      blocks.push(<h3 key={`h-${blocks.length}`} className="mb-1 mt-3 text-sm font-semibold text-ink">{inline(line.slice(3))}</h3>);
+    } else {
+      blocks.push(<p key={`p-${blocks.length}`} className="my-1.5 text-ink-dim">{inline(line)}</p>);
+    }
+  });
+  flushBullets();
+  return <div className="space-y-1 leading-relaxed">{blocks}</div>;
 }
 
 function UserMessage({ text }: { text: string }) {
@@ -73,7 +131,7 @@ function AssistantMessage({ text }: { text: string }) {
           </div>
         ) : (
           <>
-            {text}
+            <RichText text={text} />
             {looksLikeToolDump && (
               <button
                 onClick={() => setExpanded(false)}
@@ -89,9 +147,90 @@ function AssistantMessage({ text }: { text: string }) {
   );
 }
 
-function ActivityCard({ status }: { status: StatusResponse | null | undefined }) {
+function PendingApprovalItem({
+  approval,
+  onResolve,
+}: {
+  approval: PendingApproval;
+  onResolve: (id: string, decision: "approve" | "reject") => Promise<void>;
+}) {
+  const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
+
+  async function act(decision: "approve" | "reject") {
+    setBusy(decision);
+    try {
+      await onResolve(approval.id, decision);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-white/[0.08] bg-black/20 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-ink">{approval.label}</div>
+          {approval.detail && <p className="mt-1 text-xs leading-relaxed text-ink-dim">{approval.detail}</p>}
+          <div className="mt-2 flex flex-wrap gap-1.5 font-mono text-[10px] text-ink-faint">
+            <span>{approval.risk} risk</span>
+            {approval.requested_action && <span>{approval.requested_action}</span>}
+            {approval.task_id && <span>{approval.task_id}</span>}
+          </div>
+        </div>
+        <div className="flex shrink-0 gap-1.5">
+          <button
+            onClick={() => act("approve")}
+            disabled={busy !== null}
+            className="rounded-lg bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
+          >
+            {busy === "approve" ? "Approving…" : "Approve"}
+          </button>
+          <button
+            onClick={() => act("reject")}
+            disabled={busy !== null}
+            className="rounded-lg border border-white/[0.1] px-2.5 py-1 text-[11px] font-medium text-ink-dim transition-colors hover:bg-white/[0.07] hover:text-ink disabled:opacity-50"
+          >
+            {busy === "reject" ? "Rejecting…" : "Reject"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ActivityCard({
+  status,
+  onResolve,
+}: {
+  status: StatusResponse | null | undefined;
+  onResolve: (id: string, decision: "approve" | "reject") => Promise<void>;
+}) {
   const running = status?.running_tasks ?? 0;
   const pending = status?.pending_approvals ?? 0;
+  const [approvals, setApprovals] = useState<PendingApproval[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (pending === 0) {
+      setApprovals([]);
+      return;
+    }
+    let cancelled = false;
+    api.approvals()
+      .then((res) => {
+        if (!cancelled) {
+          setApprovals(res.approvals);
+          setError(null);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Could not load approvals");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pending]);
+
   if (running === 0 && pending === 0) return null;
   const waiting = pending > 0;
   return (
@@ -106,6 +245,14 @@ function ActivityCard({ status }: { status: StatusResponse | null | undefined })
           {pending > 0 && `${pending} approval${pending === 1 ? " is" : "s are"} pending. `}
           Updates stream here as they complete; you can keep typing while CENTRI works.
         </p>
+        {error && <div className="mt-3 text-xs text-rose-300">{error}</div>}
+        {approvals.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {approvals.map((approval) => (
+              <PendingApprovalItem key={approval.id} approval={approval} onResolve={onResolve} />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -207,7 +354,7 @@ export function Timeline({
               return null;
           }
         })}
-        <ActivityCard status={status} />
+        <ActivityCard status={status} onResolve={onResolve} />
         <div ref={endRef} />
       </div>
     </div>

@@ -11,7 +11,21 @@ export function CommandBar({
   const [text, setText] = useState("");
   const [inFlight, setInFlight] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (!inFlight) {
+      setElapsed(0);
+      return;
+    }
+    const started = Date.now();
+    const id = window.setInterval(() => {
+      setElapsed(Math.max(1, Math.floor((Date.now() - started) / 1000)));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [inFlight]);
 
   // Empty-state suggestion chips prefill the composer.
   useEffect(() => {
@@ -29,18 +43,30 @@ export function CommandBar({
   async function submit() {
     const trimmed = text.trim();
     if (!trimmed || inFlight) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
     setInFlight(true);
     setError(null);
     try {
-      await api.utterance(trimmed, threadId);
+      await api.utterance(trimmed, threadId, controller.signal);
       setText("");
       onSent?.();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to send");
+      if (e instanceof DOMException && e.name === "AbortError") {
+        setError("Stopped waiting. The answer may still appear if the server finishes.");
+      } else {
+        setError(e instanceof Error ? e.message : "Failed to send");
+      }
     } finally {
       setInFlight(false);
+      abortRef.current = null;
       inputRef.current?.focus();
     }
+  }
+
+  function stopWaiting() {
+    abortRef.current?.abort();
+    setInFlight(false);
   }
 
   function onSubmit(e: FormEvent) {
@@ -61,6 +87,27 @@ export function CommandBar({
         {error && (
           <div className="mb-2 animate-rise-in rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs text-rose-300">
             {error}
+          </div>
+        )}
+        {inFlight && (
+          <div className="mb-2 animate-rise-in rounded-xl border border-accent/25 bg-accent/[0.08] px-3 py-2 text-xs text-ink-dim shadow-[0_12px_40px_rgba(0,0,0,0.28)] backdrop-blur-md">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-accent" aria-hidden />
+                <span className="truncate text-ink">Generating response</span>
+                <span className="font-mono text-[10px] text-ink-faint">{elapsed}s</span>
+              </div>
+              <button
+                type="button"
+                onClick={stopWaiting}
+                className="shrink-0 rounded-lg border border-white/[0.1] px-2.5 py-1 text-[11px] font-medium text-ink-dim transition-colors hover:bg-white/[0.07] hover:text-ink"
+              >
+                Stop waiting
+              </button>
+            </div>
+            <div className="mt-1 text-[11px] leading-relaxed text-ink-faint">
+              The model is working in the background. You can stop waiting without cancelling server-side work.
+            </div>
           </div>
         )}
         <div className="glass-deep flex items-center gap-2 rounded-2xl px-4 py-3 transition-shadow focus-within:shadow-[inset_0_1px_0_rgba(255,255,255,0.09),0_0_0_1px_rgba(124,124,244,0.55),0_16px_48px_rgba(0,0,0,0.5)]">

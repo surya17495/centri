@@ -121,6 +121,18 @@ export interface ApprovalCard {
   resolved?: "approved" | "rejected";
 }
 
+export interface PendingApproval {
+  id: string;
+  task_id?: string | null;
+  thread_id?: string | null;
+  label: string;
+  detail?: string;
+  risk: string;
+  requested_action?: string;
+  requested_at?: string;
+  status?: string;
+}
+
 // A flat, render-ready timeline item.
 export type TimelineItem =
   | { kind: "narration"; id: string; ts: string; text: string; role?: "user" | "assistant" }

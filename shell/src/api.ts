@@ -2,6 +2,7 @@ import type {
   BootstrapResult,
   DiscoverResponse,
   StatusResponse,
+  PendingApproval,
   Thread,
   UtteranceResponse,
 } from "./types";
@@ -121,9 +122,10 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   status: () => req<StatusResponse>("/status"),
 
-  utterance: (text: string, threadId?: string | null) =>
+  utterance: (text: string, threadId?: string | null, signal?: AbortSignal) =>
     req<UtteranceResponse>("/utterance", {
       method: "POST",
+      signal,
       body: JSON.stringify({
         text,
         user_id: "local",
@@ -145,6 +147,8 @@ export const api = {
 
   reject: (approvalId: string) =>
     req<Record<string, unknown>>(`/approvals/${approvalId}/reject`, { method: "POST" }),
+
+  approvals: () => req<{ approvals: PendingApproval[] }>("/approvals"),
 
   cancelTask: (taskId: string) =>
     req<Record<string, unknown>>(`/tasks/${taskId}/cancel`, { method: "POST" }),

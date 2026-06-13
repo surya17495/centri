@@ -382,6 +382,7 @@ export function useEventStream(threadId: string | null = null): EventStream {
     async (approvalId: string, decision: "approve" | "reject") => {
       if (decision === "approve") await api.approve(approvalId);
       else await api.reject(approvalId);
+      refreshStatus();
       // Optimistically reflect resolution; the resolved event will confirm.
       const card = stateRef.current.approvals.get(approvalId);
       if (card) {
@@ -399,7 +400,7 @@ export function useEventStream(threadId: string | null = null): EventStream {
         bump();
       }
     },
-    [bump],
+    [bump, refreshStatus],
   );
 
   // Rebuild the ordered list whenever the version bumps.
