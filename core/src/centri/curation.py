@@ -929,6 +929,7 @@ AMBIENT_TAG = "ambient"
 
 @dataclass
 class Ambient:
+    user_profile: Dict[str, str] = field(default_factory=dict)
     identity: List[str] = field(default_factory=list)
     active_projects: List[str] = field(default_factory=list)
     open_loops: List[str] = field(default_factory=list)
@@ -936,11 +937,15 @@ class Ambient:
     source_event_id: Optional[str] = None
 
     def is_empty(self) -> bool:
-        return not (self.identity or self.active_projects or self.open_loops or self.narrative)
+        return not (self.user_profile or self.identity or self.active_projects or self.open_loops or self.narrative)
 
     def render(self, budget: int, counter: Optional[TokenCounter] = None) -> str:
         counter = counter or default_token_counter()
         lines: List[str] = []
+        if self.user_profile:
+            lines.append("User Profile:")
+            for k, v in self.user_profile.items():
+                lines.append(f"  {k}: {v}")
         if self.identity:
             lines.append("Who/conventions: " + "; ".join(self.identity))
         if self.active_projects:
@@ -964,6 +969,11 @@ class Ambient:
 async def load_ambient(graph: MemoryGraph, repo_id: Optional[str] = None) -> Ambient:
     """Read the consolidation-maintained ambient digest from the graph."""
     await graph.ensure_tables()
+    try:
+        user_profile = await graph.get_profile()
+    except Exception:
+        user_profile = {}
+
     for f in await graph.current_facts(repo_id=repo_id, include_reserved=True):
         if f.topic == AMBIENT_TOPIC and AMBIENT_TAG in f.tags:
             try:
@@ -971,18 +981,27 @@ async def load_ambient(graph: MemoryGraph, repo_id: Optional[str] = None) -> Amb
             except (TypeError, ValueError):
                 data = {}
             return Ambient(
+                user_profile=user_profile,
                 identity=list(data.get("identity") or []),
                 active_projects=list(data.get("active_projects") or []),
                 open_loops=list(data.get("open_loops") or []),
                 narrative=str(data.get("narrative") or ""),
                 source_event_id=f.source_event_id,
             )
-    return Ambient()
+    return Ambient(user_profile=user_profile)
 
 
 # ---------------------------------------------------------------------------
 # Orchestrator + render
 # ---------------------------------------------------------------------------
+@dataclass
+class VerbatimMatch:
+    text: str
+    type: str
+    source: str
+    event_id: str
+
+
 @dataclass
 class CuratedBrief:
     """The assembled brief: ambient + cued lines, stamped and explainable."""
@@ -1000,6 +1019,7 @@ class CuratedBrief:
     # ``embedding:unavailable``). Also part of the policy stamp — the write-time
     # embedding model is pinned exactly like the tokenizer.
     embedding_stamp: str = "embedding:unavailable"
+    verbatim: List[VerbatimMatch] = field(default_factory=list)
 
     def is_empty(self) -> bool:
         return self.ambient.is_empty() and not self.lines
@@ -1031,6 +1051,12 @@ class CuratedBrief:
         if body:
             out.append("Memory (assembled from the event ledger):")
             out.extend(body)
+        if self.verbatim:
+            out.append("")
+            out.append("Verbatim context:")
+            for m in self.verbatim:
+                quoted = "\n".join(f"> {line}" for line in m.text.splitlines())
+                out.append(f"{quoted} (source: {m.source})")
         return "\n".join(out).rstrip()
 
     def receipts(self) -> List[Dict[str, Any]]:
@@ -1096,6 +1122,30 @@ async def curate(
     ranked = Ranker(weights).rank(cue, candidates)
     lines = Budgeter(budget, counter).select(ranked)
     hw = await graph_high_water(graph)
+
+    verbatim = []
+    if cue.raw:
+        clean_words = []
+        for word in cue.raw.split():
+            w = word.replace('"', '').replace('*', '').replace(':', '').replace('-', '').replace('+', '').replace('^', '').strip()
+            if w:
+                clean_words.append(f'"{w}"')
+        fts_query = " ".join(clean_words)
+        if fts_query:
+            try:
+                results = await graph._db.search_events(fts_query, limit=5)
+                for r in results:
+                    verbatim.append(
+                        VerbatimMatch(
+                            text=r["text"],
+                            type=r["type"],
+                            source=r["source"],
+                            event_id=r["event_id"],
+                        )
+                    )
+            except Exception:
+                pass
+
     return CuratedBrief(
         policy_version=policy_version,
         graph_high_water=hw,
@@ -1104,6 +1154,7 @@ async def curate(
         cue=cue,
         tokenizer_stamp=counter.stamp,
         embedding_stamp=embedding_provider.stamp,
+        verbatim=verbatim,
     )
 
 

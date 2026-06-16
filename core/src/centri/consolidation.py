@@ -41,6 +41,7 @@ from centri.consolidation_prompt import (
     OP_OPEN_LOOP,
     OP_SCHEMA,
     OP_SUPERSEDE,
+    OP_PROFILE_UPDATE,
     LiveDigest,
     build_messages,
     parse_ops,
@@ -690,6 +691,8 @@ class ConsolidationLLMTier:
                 return await self._apply_close_loop(op, source_ids, model)
             if kind == OP_SUPERSEDE:
                 return await self._apply_supersede(op, source_ids, model)
+            if kind == OP_PROFILE_UPDATE:
+                return await self._apply_profile_update(op, source_ids, model)
         except Exception as exc:  # noqa: BLE001 — a single bad op must not abort the batch
             logger.debug("Op application failed", exc_info=True)
             return await self._reject(op, source_ids, model, f"apply error: {exc}")
@@ -701,6 +704,15 @@ class ConsolidationLLMTier:
         if m:
             return f"relative-time statement (use ISO dates): '{m.group(0)}'"
         return None
+
+    async def _apply_profile_update(
+        self, op: Dict[str, Any], source_ids: List[str], model: str
+    ) -> Tuple[bool, Optional[str]]:
+        key = str(op["key"]).strip()
+        value = str(op["value"]).strip()
+        source_event_id = source_ids[0] if source_ids else ""
+        await self._graph.set_profile(key, value, source_event_id=source_event_id)
+        return await self._accept(op, source_ids, model, {"kind": "profile_update", "id": key, "value": value})
 
     async def _apply_add_fact(
         self, op: Dict[str, Any], source_ids: List[str], model: str

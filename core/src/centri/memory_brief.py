@@ -196,12 +196,21 @@ class ProactiveBriefBuilder:
         await self._graph.ensure_tables()
         brief = ProactiveBrief()
 
+        # 1. Changed section: read recent events of types user.utterance and ingest.opencode.transcript
+        # (last 24h or last 50 events, whichever is smaller)
+        from datetime import datetime, timedelta, timezone
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
         try:
-            events = await self._db.recent_events(limit=window)
+            cur = await self._db._execute(
+                "SELECT type, payload_json FROM events WHERE tenant_id = 'local' AND type IN ('user.utterance', 'ingest.opencode.transcript') AND ts >= ? ORDER BY ts DESC LIMIT 50",
+                (cutoff,)
+            )
+            changed_events = [dict(row) for row in cur.fetchall()]
         except Exception:
-            events = []
-        for ev in events:
-            etype = ev.get("type", "")
+            changed_events = []
+
+        seen_texts = set()
+        for ev in changed_events:
             payload = ev.get("payload_json")
             if isinstance(payload, str):
                 try:
@@ -209,20 +218,41 @@ class ProactiveBriefBuilder:
                 except (TypeError, ValueError):
                     payload = {}
             payload = payload or {}
-            if etype == "memory.synthesized":
-                summary = payload.get("summary") or ""
-                if summary:
-                    brief.changed.append(summary)
-            elif etype in ("task.failed", "hand.failed", "hand.blocked"):
-                desc = payload.get("error") or payload.get("summary") or payload.get("description") or etype
-                brief.blocked.append(str(desc)[:160])
+            text = payload.get("text") or payload.get("content") or payload.get("transcript") or ""
+            text = text.strip()
+            if text and text not in seen_texts:
+                seen_texts.add(text)
+                brief.changed.append(text[:160])
         brief.changed = brief.changed[:5]
-        brief.blocked = brief.blocked[:5]
 
+        # 2. Blocked section: check for open loops — if there are 0 open loops, return empty list
         open_loops = await self._graph.open_loops(repo_id=repo_id, states=[LOOP_OPEN])
+        if not open_loops:
+            brief.blocked = []
+        else:
+            try:
+                events = await self._db.recent_events(limit=window)
+            except Exception:
+                events = []
+            for ev in events:
+                etype = ev.get("type", "")
+                payload = ev.get("payload_json")
+                if isinstance(payload, str):
+                    try:
+                        payload = json.loads(payload)
+                    except (TypeError, ValueError):
+                        payload = {}
+                payload = payload or {}
+                if etype in ("task.failed", "hand.failed", "hand.blocked"):
+                    desc = payload.get("error") or payload.get("summary") or payload.get("description") or etype
+                    brief.blocked.append(str(desc)[:160])
+            brief.blocked = brief.blocked[:5]
+
+        # 3. Next steps section: use open loops as suggested next steps
         for loop in open_loops[:5]:
             brief.next_steps.append(loop.intent)
 
+        # 4. Dormancy questions
         dormant = await self._graph.open_loops(repo_id=repo_id, states=[LOOP_DORMANT])
         for loop in dormant[:3]:
             brief.dormancy_questions.append(f'Still pursuing "{loop.intent}", or park it?')
