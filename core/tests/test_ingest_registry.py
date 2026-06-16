@@ -26,10 +26,16 @@ from centri.memory_graph import MemoryGraph
 def _make_opencode_db(path: Path, rows) -> None:
     conn = sqlite3.connect(str(path))
     conn.execute(
-        "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, created_at TEXT)"
+        "CREATE TABLE event (id TEXT PRIMARY KEY, type TEXT, aggregate_id TEXT, data TEXT, created_at TEXT)"
     )
+    formatted_rows = []
+    for r in rows:
+        rid, session_id, role, content, ts = r
+        data_json = json.dumps({"part": {"type": role, "text": content}})
+        formatted_rows.append((rid, "message.part.created", session_id, data_json, ts))
     conn.executemany(
-        "INSERT INTO message (id,session_id,role,content,created_at) VALUES (?,?,?,?,?)", rows
+        "INSERT INTO event (id,type,aggregate_id,data,created_at) VALUES (?,?,?,?,?)",
+        formatted_rows
     )
     conn.commit()
     conn.close()
@@ -74,7 +80,7 @@ async def env(monkeypatch):
 def _registry_with_sources(db, tmp):
     """Build a registry whose three agents point at fixture stores via config."""
     oc = tmp / "opencode.db"
-    _make_opencode_db(oc, [("m1", "s1", "assistant", "oc answer", "2026-06-01T10:00:00Z")])
+    _make_opencode_db(oc, [("m1", "s1", "assistant", "oc answer to the user query regarding how to compute EWMA correctly.", "2026-06-01T10:00:00Z")])
     cc = tmp / "claude" / "projects"
     _write_jsonl(cc / "s.jsonl", [
         {"uuid": "u1", "sessionId": "s1", "role": "assistant",
@@ -138,8 +144,8 @@ class TestBootstrap:
         assert "ingest.bootstrap.completed" in types
         assert types.count("ingest.bootstrap.progress") == 3
         # The actual messages landed as their per-agent ingest events.
-        msg_types = {e["type"] for e in events if e["type"].startswith("ingest.") and e["type"].endswith(".message")}
-        assert {"ingest.opencode.message", "ingest.claude_code.message", "ingest.cursor.message"} <= msg_types
+        msg_types = {e["type"] for e in events if e["type"].startswith("ingest.") and (e["type"].endswith(".message") or e["type"].endswith(".transcript"))}
+        assert {"ingest.opencode.transcript", "ingest.claude_code.message", "ingest.cursor.message"} <= msg_types
 
     async def test_bootstrap_idempotent(self, env):
         db, _, tmp = env
@@ -152,7 +158,7 @@ class TestBootstrap:
     async def test_bootstrap_explicit_sources(self, env):
         db, _, tmp = env
         oc = tmp / "opencode.db"
-        _make_opencode_db(oc, [("m1", "s1", "assistant", "only this", "2026-06-01T10:00:00Z")])
+        _make_opencode_db(oc, [("m1", "s1", "assistant", "only this message from the user session is expected to be processed.", "2026-06-01T10:00:00Z")])
         reg = IngestRegistry(db, config=IngestConfig())
         sources = [DiscoveredSource(agent="opencode", path=str(oc), available=True)]
         result = await reg.bootstrap(sources=sources)
