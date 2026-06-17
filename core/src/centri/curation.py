@@ -594,15 +594,16 @@ class CueBuilder:
 
         # Anaphora — verbatim tokens from the last few turns of THIS thread. We
         # only lift content tokens (the stopword/length filter), so "it"/"that"
-        # drop out and the nouns they referred to remain.
+        # drop out and the nouns they referred to remain.  Broadened: we always
+        # enrich when recent_turns are available, not just for explicit pronouns
+        # — "continue" or "fix that too" also need prior-turn context.
         anaphora_terms: List[str] = []
-        if _has_anaphora(utterance):
-            for turn in list(recent_turns or [])[-3:]:
-                for t in _tokens(turn):
-                    if t not in terms:
-                        terms.append(t)
-                        anaphora_terms.append(t)
-                        expansion.append(f"anaphora:{t}")
+        for turn in list(recent_turns or [])[-3:]:
+            for t in _tokens(turn):
+                if t not in terms:
+                    terms.append(t)
+                    anaphora_terms.append(t)
+                    expansion.append(f"anaphora:{t}")
 
         # Active-state signals — touched files/repo become soft terms.
         for path in active_files or []:
@@ -1461,6 +1462,34 @@ class Curator:
         active_task: Optional[str] = None,
         budget: Optional[Budget] = None,
     ) -> Tuple[CuratedBrief, List[Candidate], Cue]:
+        # P4: Auto-fetch recent thread events when the caller didn't supply
+        # recent_turns but did supply a thread_id. This makes the existing
+        # anaphora resolution actually fire — without it, "it"/"that"/"continue"
+        # get zero context lift because recent_turns is always None via the API.
+        if recent_turns is None and thread_id:
+            try:
+                raw_events = await self._graph._db.recent_events(
+                    thread_id=thread_id, limit=6
+                )
+                turns: List[str] = []
+                for ev in reversed(raw_events):  # chronological order
+                    pj = ev.get("payload_json", "")
+                    if not pj:
+                        continue
+                    try:
+                        payload = json.loads(pj) if isinstance(pj, str) else pj
+                    except Exception:
+                        continue
+                    if isinstance(payload, dict):
+                        for key in ("text", "content", "statement", "message", "cue"):
+                            val = payload.get(key)
+                            if val and isinstance(val, str):
+                                turns.append(val)
+                                break
+                recent_turns = turns[-3:] if turns else None
+            except Exception:
+                pass
+
         cue = await self._cue_builder.build(
             utterance,
             thread_id=thread_id,

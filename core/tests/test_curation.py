@@ -145,13 +145,15 @@ class TestCueBuilder:
         assert "jwt" in cue.anaphora_terms or "refresh" in cue.anaphora_terms
         assert "jwt" in cue.terms
 
-    async def test_no_anaphora_no_recent_lift(self, graph):
+    async def test_recent_turns_always_enrich(self, graph):
+        # Broadened: we always lift recent-turn tokens, not just for pronouns.
+        # "configure the database" with prior context about jwt should still
+        # pick up jwt/refresh as context.
         cue = await CueBuilder(graph).build(
             "configure the database",
             recent_turns=["how should we handle jwt refresh tokens"],
         )
-        # No anaphoric token in the utterance → recent turns are not lifted.
-        assert cue.anaphora_terms == []
+        assert "jwt" in cue.anaphora_terms or "refresh" in cue.anaphora_terms
 
     async def test_graph_hop_pulls_neighbor_topics(self, graph):
         await _seed(graph)
