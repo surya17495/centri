@@ -9,8 +9,8 @@ keeps durable state on an append-only event spine, and derives memory from it.
 
 ```
                     ┌──────────────────────────────┐
-                    │   Web UI  (OpenCode fork /    │
-                    │   React shell) — text surface │
+                    │  Web UI (OpenCode fork web   │
+                    │  app) — text surface         │
                     └───────────────┬──────────────┘
                                     │ HTTP + WebSocket
                     ┌───────────────▼──────────────┐
@@ -37,10 +37,8 @@ keeps durable state on an append-only event spine, and derives memory from it.
 
 ## Components
 
-- **Shell** — the OpenCode fork web app (and an optional React shell in
-  `shell/`). Talks to the core over HTTP and the `/events/stream` WebSocket. The
-  Tauri desktop wrapper (`shell/src-tauri/`) is scaffolded but not a shipped
-  built binary; use the web app.
+- **Shell** — the OpenCode fork web app. Talks to the core over HTTP and the
+  `/events/stream` WebSocket.
 - **Coordinator** (`coordinator.py`) — the brain. Classifies intent, checks
   permissions, assembles hot context, hands off to a capability, narrates, and
   records events. Hot path reads from the context cache (<50 ms); DB and memory

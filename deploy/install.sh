@@ -14,7 +14,7 @@
 #
 # After install, thin clients (any browser, or the OpenCode fork web app) connect
 # to https://<domain> with the printed auth token (Settings → Backend → Auth
-# token). Tauri desktop and mobile PWA are roadmap, not shipped clients.
+# token).
 
 set -euo pipefail
 
@@ -54,7 +54,7 @@ echo "==> [3/5] Environment ($ENV_FILE)"
 mkdir -p "$ENV_DIR"
 if [[ ! -f "$ENV_FILE" ]]; then
   TOKEN="$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-  ORIGINS="http://localhost:1420,http://127.0.0.1:1420,tauri://localhost,https://tauri.localhost"
+  ORIGINS="http://localhost:1420,http://127.0.0.1:1420"
   [[ -n "$DOMAIN" ]] && ORIGINS="$ORIGINS,https://$DOMAIN"
   cat >"$ENV_FILE" <<EOF
 # CENTRI core configuration — edit and \`systemctl restart centri\` to apply.

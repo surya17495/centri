@@ -67,7 +67,7 @@ Events are the source of truth; memory is a derived, re-derivable index over the
 
 | Layer        | What it is                                                                          |
 |--------------|-------------------------------------------------------------------------------------|
-| Web UI       | OpenCode fork web app (and an optional React shell) — activity timeline, task cards, approvals. The Tauri desktop wrapper is scaffolded, not a shipped binary. |
+| Web UI       | OpenCode fork web app — activity timeline, task cards, approvals. |
 | Coordinator  | Python core loop: understand → decide → act → narrate → remember                    |
 | Event spine  | Append-only SQLite ledger + in-memory bus, with secret redaction on write           |
 | Memory       | Typed decisions/facts/open-loops with bi-temporal supersession, derived from the spine |
@@ -222,9 +222,7 @@ The unit suite runs green offline; integration tests that need a live core, BYOK
 model keys, the `opencode` binary, or a real Letta server are environment-gated
 and skip cleanly when those are absent.
 
-The OpenCode fork web app builds and typechecks. The Tauri desktop wrapper is
-scaffolded (`shell/src-tauri/`) but not a shipped built binary — use the web app.
-Voice and mobile surfaces are on the roadmap, not shipped. The roadmap lives in
+The OpenCode fork web app builds and typechecks. The roadmap lives in
 [`docs/ROADMAP.md`](docs/ROADMAP.md); the full docs index is
 [`docs/README.md`](docs/README.md).
 
