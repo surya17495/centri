@@ -109,8 +109,8 @@ LEGACY_TAGS = frozenset({"hermes", "hal", "mempalace"})
 _LEGACY_CUE_TOKENS = frozenset({"hal", "hermes", "mempalace", "hindsight"})
 
 # Text tokens that mark a line as legacy-mentioning. Only prose that names
-# HAL/Hermes/mempalace/Hindsight by name is dropped.
-_LEGACY_TEXT_TOKENS = frozenset({"hal", "hermes", "mempalace", "hindsight"})
+# HAL/mempalace/Hindsight by name is dropped.
+_LEGACY_TEXT_TOKENS = frozenset({"hal", "mempalace", "hindsight"})
 
 
 def _is_legacy_tags(tags: Sequence[str]) -> bool:
@@ -119,7 +119,7 @@ def _is_legacy_tags(tags: Sequence[str]) -> bool:
 
 def _is_legacy_source(source: str) -> bool:
     s = (source or "").lower()
-    return "hermes" in s or "mempalace" in s or "hal" in s
+    return "mempalace" in s or "hal." in s or s == "hal" or "hindsight" in s
 
 
 def _cue_asks_for_legacy(cue: "Cue") -> bool:
