@@ -102,13 +102,14 @@ async def graph_db():
 
 async def _seed(db, g):
     """Seed one of each section so the brief is non-empty and deterministic."""
-    # changed <- memory.synthesized event
+    from datetime import datetime, timezone
+    # changed <- user.utterance event
     await db.append_event(
         event_id="evt-syn-1",
-        type="memory.synthesized",
+        type="user.utterance",
         source="memory",
-        ts="2026-01-01T00:00:00+00:00",
-        payload={"summary": "switched deploy to Caddy"},
+        ts=datetime.now(timezone.utc).isoformat(),
+        payload={"text": "switched deploy to Caddy"},
     )
     # blocked <- task.failed event
     await db.append_event(
@@ -260,3 +261,32 @@ async def test_empty_brief_does_not_stash_for_injection(graph_db):
 
     # Nothing to prepend when there is nothing pending.
     assert coord._pending_session_brief is None
+
+
+@pytest.mark.asyncio
+async def test_proactive_brief_includes_hermes_messages(graph_db):
+    db, g = graph_db
+    from datetime import datetime, timezone
+    
+    # Seed hermes.user.message
+    await db.append_event(
+        event_id="evt-hermes-user",
+        type="hermes.user.message",
+        source="hermes_turn_sync",
+        ts=datetime.now(timezone.utc).isoformat(),
+        payload={"text": "user message via hermes"},
+    )
+    # Seed hermes.assistant.message
+    await db.append_event(
+        event_id="evt-hermes-asst",
+        type="hermes.assistant.message",
+        source="hermes_turn_sync",
+        ts=datetime.now(timezone.utc).isoformat(),
+        payload={"text": "assistant message via hermes"},
+    )
+    
+    builder = ProactiveBriefBuilder(db, g)
+    brief = await builder.build()
+    
+    assert "user message via hermes" in brief.changed
+    assert "assistant message via hermes" in brief.changed
