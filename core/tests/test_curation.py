@@ -6,6 +6,7 @@ scoring, knapsack/digest fallback, ambient assembly, miss/waste emission, and
 cue building (aliases + anaphora + one graph hop).
 """
 
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -577,6 +578,164 @@ class TestLegacySuppression:
         cue = await CueBuilder(graph).build("what's our jwt refresh and testing setup")
         brief = await curate(graph, cue)
         assert brief.render() == GOLDEN
+
+
+# ---------------------------------------------------------------------------
+# Legacy suppression in the /memory/recall brief render path (ambient header)
+# ---------------------------------------------------------------------------
+class TestLegacyAmbientHeaderSuppression:
+    """Regression: /memory/recall builds its header from the ambient digest
+    (User Profile / Who-conventions / Top open loops / Recent memory) and then
+    the cued Decisions / Open-loops sections. The prior legacy-suppression fix
+    covered ``gather_candidates`` and the fallback ``MemoryBriefAssembler`` but
+    NOT this render path, so a non-legacy cue still got HAL/Hindsight lines in
+    the header. These drive the real ``Curator.assemble`` -> ``brief.render()``
+    path (what ``_recall_response`` maps to ``markdown``) and assert the header
+    stays clean unless the cue explicitly asks for legacy history.
+    """
+
+    _AMBIENT_DIGEST = {
+        # Written by consolidation._refresh_ambient from convention facts; the
+        # HAL one must be dropped for a non-legacy cue, the clean one kept.
+        "identity": [
+            "HAL namespace convention: HAL skills live under hal.skill",
+            "testing: integration tests hit a real database, never mocks",
+        ],
+        "active_projects": ["centri"],
+        "open_loops": [
+            "Investigate potential issues in HAL memory code",
+            "Determine HALMemory initialization path",
+            "Centralize richer HAL event payload",
+            "wire jwt refresh rotation into the gateway",
+        ],
+        "narrative": "Recent memory: 5 decisions, 2 facts, 3 open loops on record.",
+    }
+
+    async def _seed(self, g: MemoryGraph) -> Curator:
+        # Stored ambient digest (exactly what consolidation writes to the graph).
+        await g.add_fact(
+            Fact(
+                id="ambient-standing-context",
+                topic=AMBIENT_TOPIC,
+                statement=json.dumps(self._AMBIENT_DIGEST, sort_keys=True),
+                source_event_id="evt-amb",
+                created_at="2026-01-01T00:00:00+00:00",
+                tags=[AMBIENT_TAG],
+            )
+        )
+        # Legacy-provenance decision (tagged) — already caught by the tag filter;
+        # included so the full render path is exercised end-to-end.
+        await g.add_decision(
+            Decision(
+                id="ld1",
+                topic="auth provider",
+                statement="HAL helper/provider wraps the legacy Hermes auth client",
+                stance=STANCE_ADOPTED,
+                rationale="kept HAL provider as a compatibility shim",
+                source_event_id="evt-ld1",
+                created_at="2026-01-02T00:00:00+00:00",
+                tags=["hermes", "hal", "transcript"],
+            )
+        )
+        # Synthesized HAL decision whose tag is NOT in LEGACY_TAGS (``hal.skill``
+        # != ``hal``) and whose topic shares a token with memory cues. The tag
+        # filter misses it; the text filter must drop it, and its topic must not
+        # flip the cue into legacy mode via the graph hop.
+        await g.add_decision(
+            Decision(
+                id="ld2",
+                topic="hal memory init",
+                statement="Determine HALMemory initialization path",
+                stance=STANCE_ADOPTED,
+                rationale="centralize richer HAL event payload",
+                source_event_id="evt-ld2",
+                created_at="2026-01-03T00:00:00+00:00",
+                tags=["hal.skill"],
+            )
+        )
+        # Legacy open loop (tagged mempalace).
+        await g.add_open_loop(
+            OpenLoop(
+                id="ll1",
+                intent="review mempalace memory schema before deprecation",
+                source_event_id="evt-ll1",
+                cue="memory",
+                created_at="2026-01-04T00:00:00+00:00",
+                tags=["mempalace"],
+            )
+        )
+        # Hindsight-named convention with NO legacy tag — text filter must catch.
+        await g.add_fact(
+            Fact(
+                id="lf2",
+                topic="replay layer",
+                statement="Hindsight replay layer snapshots every turn",
+                source_event_id="evt-lf2",
+                created_at="2026-01-05T00:00:00+00:00",
+                tags=["convention"],
+            )
+        )
+        # Clean Centri memory content that SHOULD still surface for a memory cue.
+        await g.add_decision(
+            Decision(
+                id="cd1",
+                topic="memory continuity",
+                statement="use event-sourced spine for memory continuity",
+                stance=STANCE_ADOPTED,
+                rationale="durable replay without a separate store",
+                source_event_id="evt-cd1",
+                created_at="2026-01-06T00:00:00+00:00",
+                tags=["memory"],
+            )
+        )
+        return Curator(g, settings=None)
+
+    async def test_non_legacy_cue_omits_hal_from_header_and_sections(self, graph):
+        curator = await self._seed(graph)
+        # The actual /memory/recall path: Curator.assemble -> CuratedBrief.
+        brief, _cands, _cue = await curator.assemble(
+            "futures-agent current work live sim memory continuity"
+        )
+        md = brief.render()
+        # The cue never names a legacy system, so the brief must not leak any.
+        for needle in (
+            "HALMemory",
+            "Hindsight",
+            "hal.skill",
+            "HAL namespace",
+            "HAL helper",
+            "HAL memory",
+            "HAL event",
+            "mempalace",
+            "Hermes",
+        ):
+            assert needle not in md, f"legacy leakage {needle!r} in brief:\n{md}"
+        # Ambient header is still rendered (clean identity + open loop survive).
+        assert "Who/conventions:" in md, md
+        assert "integration tests hit a real database" in md, md
+        assert "wire jwt refresh rotation" in md, md
+        # Clean Centri memory content still surfaces in the cued section.
+        assert "event-sourced spine" in md, md
+
+    async def test_explicit_hal_cue_surfaces_legacy_history(self, graph):
+        curator = await self._seed(graph)
+        brief, _cands, _cue = await curator.assemble("tell me about the HAL memory setup")
+        md = brief.render()
+        # The user explicitly asked about HAL, so the ambient header keeps the
+        # HAL open loops (and the legacy decisions are candidates again).
+        assert "HALMemory" in md, md
+
+    async def test_graph_hop_neighbor_does_not_unsuppress_legacy(self, graph):
+        # A legacy decision whose topic shares "memory" with the cue must NOT
+        # pull "hal" into the cue's explicit-mention set and unsuppress HAL.
+        curator = await self._seed(graph)
+        brief, _cands, cue = await curator.assemble("memory continuity")
+        # Sanity: the graph hop DID pull the neighbor topic token into terms…
+        assert "hal" in cue.terms or "init" in cue.terms, cue.terms
+        # …yet the brief still suppresses legacy because the user did not name it.
+        md = brief.render()
+        for needle in ("HALMemory", "hal.skill", "Hindsight", "HAL namespace"):
+            assert needle not in md, f"legacy leakage {needle!r} in brief:\n{md}"
 
 
 # ---------------------------------------------------------------------------

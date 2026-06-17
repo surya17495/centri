@@ -108,6 +108,12 @@ LEGACY_TAGS = frozenset({"hermes", "hal", "mempalace"})
 # old memory and should see it.
 _LEGACY_CUE_TOKENS = frozenset({"hal", "hermes", "mempalace", "hindsight", "legacy"})
 
+# Text tokens that mark a line as legacy-mentioning. The cue opt-in set above
+# also includes the generic word "legacy"; text suppression is narrower so a
+# convention that merely talks about a "legacy migration" is not blanked out —
+# only prose that names HAL/Hermes/mempalace/Hindsight by name is dropped.
+_LEGACY_TEXT_TOKENS = frozenset({"hal", "hermes", "mempalace", "hindsight"})
+
 
 def _is_legacy_tags(tags: Sequence[str]) -> bool:
     return bool(LEGACY_TAGS & {t.lower() for t in tags})
@@ -119,7 +125,38 @@ def _is_legacy_source(source: str) -> bool:
 
 
 def _cue_asks_for_legacy(cue: "Cue") -> bool:
-    return bool(_LEGACY_CUE_TOKENS & cue.term_set())
+    """The user is explicitly asking about a legacy system.
+
+    Based on the user's own utterance plus anaphora-resolved recent turns (what
+    ``it``/``that`` pointed at) — NOT on graph-hop neighbor tokens. A legacy
+    decision that merely shares a token with the cue must not flip the brief
+    into legacy-surfacing mode on its own, or every neighbor of a legacy node
+    would unsuppress HAL/Hindsight and the ambient header would leak again.
+    """
+    user_terms = set(_tokens(cue.raw)) | set(cue.anaphora_terms)
+    return bool(_LEGACY_CUE_TOKENS & user_terms)
+
+
+def _text_mentions_legacy(text: str) -> bool:
+    """True if ``text`` names a legacy system (HAL/Hermes/mempalace/Hindsight).
+
+    Tag-based suppression catches legacy-provenance graph nodes, but two leak
+    paths remain for the rendered brief: (1) the ambient digest is a
+    denormalized summary whose strings carry no tags, and (2) consolidation may
+    synthesize HAL-mentioning decisions/conventions from legacy transcripts with
+    non-legacy tags (e.g. ``hal.skill``). This text check is what keeps those
+    out of the brief for non-legacy cues without touching the stored rows.
+
+    Whole-word matching handles "HAL namespace", "Hindsight", and dotted forms
+    like "hal.skill" (the dot splits the token). Fused CamelCase such as
+    "HALMemory" lowercases to one token with no boundary, so HAL is also matched
+    as a capitalized leading run followed by another uppercase letter.
+    """
+    if not text:
+        return False
+    if _LEGACY_TEXT_TOKENS & set(re.findall(r"[a-z0-9]+", text.lower())):
+        return True
+    return bool(re.search(r"\b(?:HAL|Hindsight)(?=[A-Z])", text))
 
 
 @dataclass(frozen=True)
@@ -941,9 +978,20 @@ async def gather_candidates(
 
     # Legacy suppression: when Centri is the active memory provider, items
     # ingested from HAL/Hermes/mempalace are treated as legacy and removed
-    # from the candidate pool unless the cue explicitly mentions them.
+    # from the candidate pool unless the cue explicitly mentions them. The tag
+    # check catches legacy-provenance nodes; the text check also drops items
+    # whose statement/topic names a legacy system (e.g. synthesis decisions
+    # tagged ``hal.skill`` or carrying HAL/Hindsight prose), so the rendered
+    # "Decisions already made / Open loops" sections stay clean for non-legacy
+    # cues.
     if not _cue_asks_for_legacy(cue):
-        cands = [c for c in cands if not _is_legacy_tags(c.tags)]
+        cands = [
+            c
+            for c in cands
+            if not _is_legacy_tags(c.tags)
+            and not _text_mentions_legacy(c.text)
+            and not _text_mentions_legacy(c.topic)
+        ]
 
     return cands
 AMBIENT_TOPIC = "ambient-standing-context"
@@ -1016,6 +1064,33 @@ async def load_ambient(graph: MemoryGraph, repo_id: Optional[str] = None) -> Amb
                 source_event_id=f.source_event_id,
             )
     return Ambient(user_profile=user_profile)
+
+
+def _suppress_ambient_legacy(ambient: Ambient) -> Ambient:
+    """Return ``ambient`` with legacy-mentioning header lines dropped.
+
+    The ambient digest is a denormalized summary that consolidation writes from
+    the live graph: ``identity`` (convention strings), ``open_loops`` (intent
+    strings), ``user_profile`` values, and a ``narrative`` count. Legacy nodes
+    can land in those strings even though the cued candidate pool is tag- and
+    text-filtered, so when Centri is the active provider and the cue is not
+    asking about legacy systems, those lines are dropped here at read time. The
+    stored graph rows (audit history) are never deleted — this only changes what
+    the per-turn brief prepends. ``active_projects`` holds repo ids, not memory
+    content, so it is passed through unchanged.
+    """
+    return Ambient(
+        user_profile={
+            k: v
+            for k, v in ambient.user_profile.items()
+            if not _text_mentions_legacy(k) and not _text_mentions_legacy(v)
+        },
+        identity=[s for s in ambient.identity if not _text_mentions_legacy(s)],
+        active_projects=list(ambient.active_projects),
+        open_loops=[s for s in ambient.open_loops if not _text_mentions_legacy(s)],
+        narrative=ambient.narrative if not _text_mentions_legacy(ambient.narrative) else "",
+        source_event_id=ambient.source_event_id,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1145,6 +1220,12 @@ async def curate(
     repo_id = repo_id if repo_id is not None else cue.repo_id
 
     ambient = await load_ambient(graph, repo_id=repo_id)
+    # Suppress legacy HAL/Hermes/mempalace/Hindsight from the ambient header
+    # (User Profile / Who/conventions / Top open loops / Recent memory) unless
+    # the cue is asking about a legacy system. Mirrors gather_candidates' tag
+    # filter for the cued section; the stored digest rows stay as audit history.
+    if not _cue_asks_for_legacy(cue):
+        ambient = _suppress_ambient_legacy(ambient)
     candidates = await gather_candidates(graph, cue, repo_id)
     ranked = Ranker(weights).rank(cue, candidates)
     lines = Budgeter(budget, counter).select(ranked)
@@ -1174,9 +1255,15 @@ async def curate(
                 pass
 
     # Apply the same legacy suppression to verbatim event matches: HAL/Hermes/
-    # mempalace events stay out of the brief unless the cue asks for them.
+    # mempalace events stay out of the brief unless the cue asks for them. The
+    # source check catches legacy provenance; the text check also drops matches
+    # whose content names a legacy system even under a neutral source.
     if not _cue_asks_for_legacy(cue):
-        verbatim = [v for v in verbatim if not _is_legacy_source(v.source)]
+        verbatim = [
+            v
+            for v in verbatim
+            if not _is_legacy_source(v.source) and not _text_mentions_legacy(v.text)
+        ]
 
     return CuratedBrief(
         policy_version=policy_version,
