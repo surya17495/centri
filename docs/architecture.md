@@ -10,7 +10,7 @@ keeps durable state on an append-only event spine, and derives memory from it.
 ```
                     ┌──────────────────────────────┐
                     │   Shell  (Tauri 2 + React)    │   ← Phase 1
-                    │   voice / text surface        │
+                    │   text surface                │
                     └───────────────┬──────────────┘
                                     │ HTTP + WebSocket
                     ┌───────────────▼──────────────┐

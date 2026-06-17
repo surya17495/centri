@@ -1,5 +1,14 @@
 # Contributing to OpenCode
 
+> [!NOTE]
+> This repository is **Centri**, a fork of the MIT-licensed
+> [OpenCode](https://github.com/anomalyco/opencode) project. The guide below is
+> inherited from upstream OpenCode and applies to the `packages/opencode` workspace;
+> its links (issues, Discord, vouch) point at the upstream OpenCode project. For
+> Centri-core development, the fork structure, and deployment, see
+> [README.md](./README.md), [FORK-NOTES.md](./FORK-NOTES.md), and
+> [docs/README.md](./docs/README.md).
+
 We want to make it easy for you to contribute to OpenCode. Here are the most common type of changes that get merged:
 
 - Bug fixes

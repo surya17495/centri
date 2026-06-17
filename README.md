@@ -15,6 +15,23 @@ ledger, and every per-turn context is **assembled fresh** by a deterministic cur
 function that attaches a receipt to every line. The context window is a cache, not
 storage.
 
+## What's in this repo
+
+Centri is two halves that share one durable memory, plus a Hermes plugin:
+
+| Half | What | Lives in |
+|------|------|----------|
+| **Centri core** | Python memory API: append-only event spine, typed memory graph with bi-temporal supersession, deterministic curation, optional LLM consolidation, REST/WS surface. | [`core/`](core) |
+| **OpenCode fork** | The TypeScript/Bun OpenCode app shell, patched (each patch marked `// CENTRI`) so every turn recalls a brief from the core and runtime events are tapped back into the spine. All memory calls **fail open**. | [`packages/opencode/src/centri/`](packages/opencode/src/centri) |
+| **Hermes plugin** | A deployable `memory.provider` translating Hermes memory calls into the core's HTTP API. | [`deploy/hermes-plugin/centri/`](deploy/hermes-plugin/centri) |
+
+The **event spine is the source of truth**; the memory graph is a derived, re-derivable
+index over it. Centri is a fork of the MIT-licensed
+[OpenCode](https://github.com/anomalyco/opencode) project — upstream attribution is
+preserved in [`LICENSE-OPENCODE`](LICENSE-OPENCODE) and
+[`upstream/opencode/`](upstream/opencode/), and the fork diff is documented in
+[`FORK-NOTES.md`](FORK-NOTES.md) and [`docs/centri-app.md`](docs/centri-app.md).
+
 ## Key capabilities
 
 - **Typed memory graph with bi-temporal supersession** — decisions, facts, and open
@@ -54,7 +71,8 @@ Events are the source of truth; memory is a derived, re-derivable index over the
 | Hands        | Capability router over coding agents — ACP preferred, native OpenCode fallback   |
 | Tools        | `ToolProvider` contract with Composio; event-ledgered, approval-gated invocation |
 
-See [`docs/architecture.md`](docs/architecture.md),
+See [`docs/README.md`](docs/README.md) for the full index, or
+[`docs/architecture.md`](docs/architecture.md),
 [`docs/memory-architecture.md`](docs/memory-architecture.md),
 [`docs/event-contract.md`](docs/event-contract.md), and
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for detail.
@@ -205,14 +223,17 @@ See [`docs/centri-bench.md`](docs/centri-bench.md) for the full methodology.
 
 ## Status
 
-The core, memory graph, coding hands, and tool contract are verified by a 365-test
-suite (`cd core && python -m pytest tests/`), covering the event spine with
-redaction, the real ACP coding loop against the `opencode` binary with error-path and
-failover drills, the typed memory graph with supersession, deterministic curation
-parity between chat and coding turns, bearer auth, and the Composio tool path. The
-React web shell builds, typechecks, and runs in a browser. The Tauri desktop wrapper is
-scaffolded but needs a local Rust toolchain to build. Voice is next on the roadmap — see
-[`docs/ROADMAP.md`](docs/ROADMAP.md).
+The core, memory graph, coding hands, and tool contract are covered by a 385-test
+suite (`cd core && python -m pytest tests/`): the event spine with redaction, the
+real ACP coding loop against the `opencode` binary with error-path and failover
+drills, the typed memory graph with supersession, deterministic curation parity
+between chat and coding turns, bearer auth, and the Composio tool path. Core memory,
+curation, and graph tests run green locally; the remaining tests are
+environment-gated (they need a live core, BYOK model keys, or the `opencode` binary).
+The React web shell builds, typechecks, and runs in a browser. The desktop wrapper is
+scaffolded but needs a local native toolchain to build. The roadmap lives in
+[`docs/ROADMAP.md`](docs/ROADMAP.md); the full docs index is
+[`docs/README.md`](docs/README.md).
 
 ## License
 
@@ -222,7 +243,9 @@ modify, and self-host it for any purpose other than a competing commercial use.
 The competing-use restriction lapses two years after each release, at which
 point that release converts to Apache-2.0.
 
-Runtime dependencies are permissively licensed (MIT/BSD/Apache-2.0). OpenCode is
-an external MIT-licensed process that CENTRI speaks to over ACP, not a bundled
-or derivative component. `letta-client` is bench-only tooling, not a product
-dependency.
+The OpenCode app shell in [`packages/opencode/`](packages/opencode/) is a fork of
+the MIT-licensed [OpenCode](https://github.com/anomalyco/opencode) project; its
+upstream license is preserved at [`LICENSE-OPENCODE`](LICENSE-OPENCODE) and the
+original upstream README is kept at [`upstream/opencode/`](upstream/opencode/).
+Runtime dependencies are permissively licensed (MIT/BSD/Apache-2.0).
+`letta-client` is bench-only tooling, not a product dependency.
