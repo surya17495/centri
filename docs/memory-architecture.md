@@ -42,14 +42,15 @@ to a concrete mechanism in this codebase and closes a failure mode that incumben
 
 | System          | What it holds                                              | Mechanism in CENTRI                                                                 |
 |-----------------|------------------------------------------------------------|-------------------------------------------------------------------------------------|
-| **Episodic**    | What happened, in order; what was tried, failed, abandoned | The typed event ledger (Phase 0). Capture at the delegation boundary, at write time |
+| **Episodic**    | What happened, in order; what was tried, failed, abandoned | The typed event ledger. Capture at the delegation boundary, at write time |
 | **Semantic**    | Durable Decision/Fact objects; "true now vs true in March" | Typed objects with `supersedes` links + provenance receipts into the ledger         |
 | **Prospective** | What we still intend to do; open questions; cues           | `OpenLoop` objects + the ported scheduler; loops fire on cue/schedule               |
 | **Procedural**  | How the user works ("how I deploy", "how experiments run") | Skill/policy files distilled from repeated episodes; injected into hand briefs      |
+| **Working**     | What am I doing *right now* — active task, files, sub-questions | Per-thread key-value store, read before and written after each curation pass   |
 
 ### Episodic — the event ledger
 
-Episodic memory already exists as the Phase 0 spine: the `events` table in
+Episodic memory is the spine: the `events` table in
 [`db.py`](../core/src/centri/db.py), written through `append_event()` after
 redaction. The distinguishing move versus incumbents is **where** capture happens.
 Chat agents only ever see a transcript. CENTRI captures at the *delegation
@@ -58,6 +59,30 @@ boundary* — `task.started`, `task.progress`, `artifact.created`,
 test result, and a verdict are first-class events, not prose a model has to
 re-infer later. The required families are enumerated in
 [`event-contract.md`](event-contract.md).
+
+**Project-keyed scoping.** Every event is scoped to a *project*, not to a session.
+Sessions are an execution detail — the memory boundary is the project. A project
+is universal: a coding repo, a research topic, a conversation thread, a person.
+The `projects` table (`id, name, kind, ref`) is the universal scoping primitive.
+Coding repos are double-bookkept: a `repos` row holds coding-specific metadata
+(branch, ahead/behind), and a `projects` row of `kind='repo'` is the scoping
+reference. Non-coding work (research, conversations, voice) creates projects of
+`kind='topic'`. At ingest time, the adapter resolves a project from the session's
+`directory` field (→ repo project) or falls back to the slug/title (→ topic
+project), so every event carries a `repo_id` (the project id, kept under the
+legacy column name for compatibility). The curation ranker's thread-affinity
+feature uses this to give same-project candidates partial credit across sessions.
+
+**Importance filtering.** Every event carries an `importance` field (`low`,
+`normal`, `high`) set at ingest time. Tool output and audit noise are `low`;
+user utterances, assistant responses, decisions, and session activity are
+`normal`. Verbatim FTS recall (`search_events`) defaults to `min_importance='normal'`,
+excluding the 90%+ of the spine that is tool output so recall surfaces real
+conversation, not shell-command snippets. The consolidation worker also skips
+`low`-importance events when promoting to the typed graph — tool output stays in
+the spine for provenance but never becomes a graph node. The memory system's own
+events (`consolidation.*`, `memory.*` sources) are always excluded from verbatim
+recall: they are the system talking to itself, never user-facing context.
 
 ### Semantic + supersession
 
@@ -96,6 +121,20 @@ Letta's git-backed MemFS. A procedure is promoted only after the same pattern is
 observed across multiple episodes, so it reflects demonstrated habit, not a single
 instance.
 
+### Working — what am I doing right now
+
+Working memory bridges turns within a single session without re-deriving state
+from the full spine. It is a per-thread key-value store (`working_memory` table)
+that holds the current task, active files, and the last utterance. Before each
+curation pass, the `Curator.assemble()` reads working memory to recover
+active-files and active-task context that the caller didn't supply — so
+"continue" or "fix that too" picks up the right files without the user
+re-stating them. After the pass, the current utterance and active state are
+written back so the next turn inherits them. Entries are discarded when the
+thread ends (`clear_working_context`). This is the cognitive-science analog of
+working memory: small, fast, and ephemeral, bridging the gap between the
+photographic spine and the current moment.
+
 ## Core mechanisms
 
 ### Consolidation worker ("sleep cycle")
@@ -114,6 +153,11 @@ Hard rules for the worker:
   old truth; the ledger retains both, the semantic index reflects only the current.
 - **Never confabulate.** If an outcome cannot be attributed to an event, store
   `"outcome unknown"` rather than inventing a result.
+- **Importance-filtered promotion.** Events marked `low` importance (tool output,
+  audit noise) are skipped during promotion — they stay in the spine for
+  provenance but never become graph nodes. Both tiers (deterministic and LLM)
+  apply this filter, so the typed graph tracks decisions, facts, and open loops
+  derived from substantive interaction only.
 
 ### Sleep-time consolidation via a proposal contract (two tiers)
 
@@ -219,6 +263,18 @@ relevant decisions, rejected approaches, conventions, and open alternatives into
 the brief that goes to whatever hand executes the work — through the
 [`Hand`](../core/src/centri/hands/base.py) contract, the same brief shape for an
 `OpenCodeHand` subprocess or an `AcpHand` JSON-RPC peer.
+
+The brief has two layers: a **cued** layer (ranked retrieval over the typed graph)
+and an **ambient** layer (standing context: identity, active projects, top open
+loops). A **verbatim** layer adds full-text search matches from the event spine,
+filtered to `normal`-importance events and sorted by source priority — user
+utterances first, then assistant responses, then session activity, then tool
+output — so the most important conversation surfaces above reference material.
+
+**Working memory** is read before the curation pass to recover the active task
+and files from the prior turn, and written after with the current utterance and
+state. This gives mid-session continuity ("continue", "fix that too") without
+re-scanning the full spine each turn.
 
 | Hand kind                          | What injection gives it                                                            |
 |------------------------------------|------------------------------------------------------------------------------------|
