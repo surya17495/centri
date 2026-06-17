@@ -49,7 +49,7 @@ strict config schema (a low-risk choice for the demo; can be added later).
 
 ## Endpoints used (see `contracts/bridge-api.md`)
 
-- `POST /memory/recall` — read path. 800ms timeout, fail-open → no brief.
+- `POST /memory/recall` — read path. 3s timeout (configurable via `CENTRI_RECALL_TIMEOUT_MS`), fail-open → no brief.
 - `POST /events/import` — write path. Batched (flush every 2s or 50 events),
   fire-and-forget, 5s timeout. Drops a failed batch rather than retry-looping.
 - `GET /memory/ambient.md?token=` — ambient layer. `Centri.ambientUrl()` builds
@@ -59,12 +59,16 @@ strict config schema (a low-risk choice for the demo; can be added later).
 ## How per-turn injection works
 
 1. A user sends a message → `SessionPrompt.prompt` → `runLoop`.
-2. On the first model call of that turn (`step === 1`), `centriCue(lastUserMsg)`
+2. On the first model call of that turn (`step === 1`), `centriCue(msgs)`
    builds a cue string: the user's visible text (non-synthetic, non-ignored text
-   parts) plus any attached file names (`Active files: a.ts, b.ts`).
+   parts) plus any attached file names (`Active files: a.ts, b.ts`), plus the
+   last 6 conversation turns (user+assistant, truncated to 500 chars each) for
+   anaphora resolution — so "where did we leave off?" or "is that still
+   broken?" can match against prior session context.
 3. `Centri.recall(cue, { threadID: sessionID })` POSTs to `/memory/recall` with
-   an 800ms timeout. The core runs its pure `curate()` and returns
-   `{ markdown, items, ... }`. No LLM at read time.
+   a 3s timeout (configurable via `CENTRI_RECALL_TIMEOUT_MS`). The core runs
+   its pure `curate()` and returns `{ markdown, items, ... }`. No LLM at read
+   time.
 4. If a non-empty `markdown` brief comes back, it's pushed onto this turn's
    `system[]` array (after env/instructions/skills, before structured-output
    prompt). It is NOT persisted as a message — it's a per-turn system entry.

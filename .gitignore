@@ -64,3 +64,10 @@ UPCOMING_CHANGELOG.md
 logs/
 *.bun-build
 tsconfig.tsbuildinfo
+
+# Internal handoff/state docs (not public)
+HANDOFF.md
+STATE-AND-HANDOFF.md
+CONTEXT.md
+FORK-NOTES.md
+VERIFY.md

@@ -335,8 +335,11 @@ transcripts). GLM-5.2 is the consolidation model.
   (`consolidation_prompt.py`) emits typed ops — `add_fact`, `open_loop`,
   `decision`, `supersede`, `profile_update`, `finish` — and a **deterministic
   gatekeeper** validates → applies/rejects each one with a provenance receipt
-  (`consolidation.proposal.applied` / `.rejected`). Hinted events never reach
-  the tier.
+  (`consolidation.proposal.applied` / `.rejected`). The prompt includes
+  explicit **obsolescence detection** instructions: the model examines ALL live
+  decisions/facts/open_loops (cross-repo, not scoped by `repo_id`) and emits
+  `supersede` / `close_loop` ops for nodes that are now stale or abandoned.
+  Hinted events never reach the tier.
 
 ```bash
 # .env (commented in .env.example — uncomment + fill to enable)

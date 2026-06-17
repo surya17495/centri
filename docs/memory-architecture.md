@@ -162,6 +162,26 @@ the op, the `source_event_ids`, the model id, and (on reject) the reason; a
 records not just *what* the LLM tier wrote but *why every proposal was accepted or
 refused* — auditable after the fact, with token discipline.
 
+**Obsolescence detection.** The consolidation prompt explicitly instructs the
+model to examine the live-node digest alongside new activity and emit
+`supersede` / `close_loop` ops for any existing decision, fact, or open loop
+that is now obsolete — superseded by newer decisions, contradicted by newer
+facts, or referencing an abandoned/replaced project or system. This is how the
+graph self-cleans without manual cleanup: as the model sees Centri activity
+alongside stale HAL decisions in the cross-repo digest, it supersedes them
+automatically.
+
+**Cross-repo digest.** The live-node digest shown to the model is **not scoped
+by `repo_id`** — it includes ALL live decisions, facts, and open loops across
+all repos. This is essential for cross-project obsolescence detection (e.g.
+"adopt HAL as memory provider" must be visible when processing Centri events
+so the model can supersede it).
+
+**Token budget.** The completion `max_tokens` is 8192 (configurable via
+`CENTRI_CONSOLIDATION_MAX_TOKENS`). The prior default of 2048 was too low —
+the model hit the ceiling mid-JSON on ~80% of batches, producing truncated
+output that the gatekeeper rejected as malformed.
+
 **Triggering.** The tier piggybacks on the consolidation tick. The scheduler stages
 unhinted events into a backlog and fires the tier when the backlog reaches a batch
 size (`CENTRI_CONSOLIDATION_BATCH_SIZE`, default 8) **or** when a staleness bound is
