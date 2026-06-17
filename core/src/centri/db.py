@@ -20,6 +20,21 @@ from centri.redaction import redact_jsonable
 DEFAULT_TENANT = "local"
 
 
+def _extract_fts_text(payload_json: Any) -> Optional[str]:
+    if not payload_json:
+        return None
+    try:
+        payload = json.loads(payload_json) if isinstance(payload_json, str) else payload_json
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    for key in ("text", "content", "statement", "intent", "description", "cue", "message"):
+        if key in payload and payload[key] is not None:
+            return str(payload[key])
+    return None
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY,
@@ -35,6 +50,71 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS event_fts USING fts5(text, type, source, content_rowid='rowid');
+
+CREATE TRIGGER IF NOT EXISTS events_after_insert AFTER INSERT ON events
+WHEN CASE WHEN json_valid(new.payload_json) THEN
+    coalesce(
+        json_extract(new.payload_json, '$.text'),
+        json_extract(new.payload_json, '$.content'),
+        json_extract(new.payload_json, '$.statement'),
+        json_extract(new.payload_json, '$.intent'),
+        json_extract(new.payload_json, '$.description'),
+        json_extract(new.payload_json, '$.cue'),
+        json_extract(new.payload_json, '$.message')
+    )
+ELSE NULL END IS NOT NULL
+BEGIN
+    INSERT INTO event_fts (rowid, text, type, source)
+    VALUES (
+        new.rowid,
+        coalesce(
+            json_extract(new.payload_json, '$.text'),
+            json_extract(new.payload_json, '$.content'),
+            json_extract(new.payload_json, '$.statement'),
+            json_extract(new.payload_json, '$.intent'),
+            json_extract(new.payload_json, '$.description'),
+            json_extract(new.payload_json, '$.cue'),
+            json_extract(new.payload_json, '$.message')
+        ),
+        new.type,
+        new.source
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS events_after_update AFTER UPDATE ON events
+BEGIN
+    DELETE FROM event_fts WHERE rowid = old.rowid;
+    INSERT INTO event_fts (rowid, text, type, source)
+    SELECT
+        new.rowid,
+        coalesce(
+            json_extract(new.payload_json, '$.text'),
+            json_extract(new.payload_json, '$.content'),
+            json_extract(new.payload_json, '$.statement'),
+            json_extract(new.payload_json, '$.intent'),
+            json_extract(new.payload_json, '$.description'),
+            json_extract(new.payload_json, '$.cue'),
+            json_extract(new.payload_json, '$.message')
+        ),
+        new.type,
+        new.source
+    WHERE CASE WHEN json_valid(new.payload_json) THEN
+        coalesce(
+            json_extract(new.payload_json, '$.text'),
+            json_extract(new.payload_json, '$.content'),
+            json_extract(new.payload_json, '$.statement'),
+            json_extract(new.payload_json, '$.intent'),
+            json_extract(new.payload_json, '$.description'),
+            json_extract(new.payload_json, '$.cue'),
+            json_extract(new.payload_json, '$.message')
+        )
+    ELSE NULL END IS NOT NULL;
+END;
+
+CREATE TRIGGER IF NOT EXISTS events_after_delete AFTER DELETE ON events
+BEGIN
+    DELETE FROM event_fts WHERE rowid = old.rowid;
+END;
 
 CREATE TABLE IF NOT EXISTS threads (
     id TEXT PRIMARY KEY,
@@ -193,20 +273,11 @@ class Database:
             if has_events and not has_fts:
                 cursor = conn.execute("SELECT rowid, type, source, payload_json FROM events")
                 for rowid, type_, source, payload_json in cursor.fetchall():
-                    try:
-                        payload = json.loads(payload_json)
-                    except Exception:
-                        payload = {}
-                    text_to_index = None
-                    if isinstance(payload, dict):
-                        if "text" in payload:
-                            text_to_index = payload["text"]
-                        elif "content" in payload:
-                            text_to_index = payload["content"]
+                    text_to_index = _extract_fts_text(payload_json)
                     if text_to_index is not None:
                         conn.execute(
                             "INSERT OR IGNORE INTO event_fts (rowid, text, type, source) VALUES (?, ?, ?, ?)",
-                            (rowid, str(text_to_index), type_, source),
+                            (rowid, text_to_index, type_, source),
                         )
         except sqlite3.OperationalError:
             # In case FTS5 is not available or event_fts fails, ignore to prevent breaking the boot
@@ -241,30 +312,13 @@ class Database:
     ) -> None:
         # Redact secrets before the payload ever touches the append-only ledger.
         payload_json = json.dumps(redact_jsonable(payload or {}))
-        
-        text_to_index = None
-        if isinstance(payload, dict):
-            if "text" in payload:
-                text_to_index = payload["text"]
-            elif "content" in payload:
-                text_to_index = payload["content"]
 
         async with self._lock:
             conn = await self._get_conn()
-            cur = conn.execute(
+            conn.execute(
                 "INSERT INTO events (id, type, source, ts, thread_id, task_id, repo_id, tenant_id, importance, payload_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (event_id, type, source, ts, thread_id, task_id, repo_id, tenant_id, importance, payload_json),
             )
-            if text_to_index is not None:
-                rowid = cur.lastrowid
-                try:
-                    conn.execute(
-                        "INSERT INTO event_fts (rowid, text, type, source) VALUES (?, ?, ?, ?)",
-                        (rowid, str(text_to_index), type, source),
-                    )
-                except sqlite3.OperationalError:
-                    # Fail open if event_fts table doesn't exist or FTS5 fails
-                    pass
             conn.commit()
 
     async def recent_events(
@@ -318,6 +372,7 @@ class Database:
                 FROM event_fts
                 JOIN events ON events.rowid = event_fts.rowid
                 WHERE event_fts MATCH ?
+                ORDER BY bm25(event_fts) ASC
                 LIMIT ?
                 """,
                 (query, limit),

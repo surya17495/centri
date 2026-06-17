@@ -1239,7 +1239,7 @@ async def curate(
             w = word.replace('"', '').replace('*', '').replace(':', '').replace('-', '').replace('+', '').replace('^', '').strip()
             if w:
                 clean_words.append(f'"{w}"')
-        fts_query = " ".join(clean_words)
+        fts_query = " OR ".join(clean_words)
         if fts_query:
             try:
                 results = await graph._db.search_events(fts_query, limit=5)
