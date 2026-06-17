@@ -43,6 +43,7 @@ class _DBMixin:
                 source=ev.get("source", "bench"),
                 ts=ev["ts"],
                 repo_id=ev.get("repo_id"),
+                importance=ev.get("importance", "normal"),
                 payload=ev.get("payload", {}),
             )
 
@@ -127,7 +128,9 @@ class NativeBackend(_DBMixin):
                 except (TypeError, ValueError):
                     payload = {}
                 events.append({"id": row.get("id"), "type": row.get("type"),
-                               "repo_id": row.get("repo_id"), "payload": payload})
+                               "repo_id": row.get("repo_id"),
+                               "importance": row.get("importance"),
+                               "payload": payload})
             backlog = [e for e in events if not event_has_hints(e["payload"])]
             if backlog:
                 await tier.consume_unhinted(backlog, force=True)

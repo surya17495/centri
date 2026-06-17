@@ -473,7 +473,14 @@ class OpenCodeIngestor(MessageAdapter):
     async def ingest(
         self, path: str | Path, source: Optional[str] = None, repo_id: Optional[str] = None, limit: int = 5000
     ) -> Dict[str, Any]:
-        """Override: we now accept ``event`` rows (not just messages)."""
+        """Override: we now accept ``event`` rows (not just messages).
+
+        When ``repo_id`` is not passed by the caller, the ingestor resolves one
+        from the session row's ``directory`` field (→ a project of kind='repo')
+        or falls back to a topic project keyed on the session slug/title. This
+        ensures every emitted event is project-scoped, which is what the
+        curation ranker needs to give same-project candidates partial credit.
+        """
         p = Path(path)
         src = source or self.default_source(p)
         if not p.exists():
@@ -507,7 +514,8 @@ class OpenCodeIngestor(MessageAdapter):
         max_rowid = hwm_rowid
         for row in rows:
             rowid = row.get("_rowid")
-            wrote = await self._append_structured_event(src, row, repo_id)
+            resolved_repo_id = repo_id or await self._resolve_project_for_row(row)
+            wrote = await self._append_structured_event(src, row, resolved_repo_id)
             if wrote:
                 ingested += 1
             if rowid is not None and rowid > max_rowid:
@@ -524,6 +532,26 @@ class OpenCodeIngestor(MessageAdapter):
             "scanned": scanned,
             "available": True,
         }
+
+    async def _resolve_project_for_row(self, row: Dict[str, Any]) -> Optional[str]:
+        """Derive a project id from a row's session metadata.
+
+        Coding sessions carry a ``directory`` field → resolve to a repo project.
+        Sessions without a directory (rare for opencode but possible) fall back
+        to a topic project keyed on the slug or title so the event is still
+        scoped. Returns ``None`` only when no identifier is available at all.
+        """
+        data = row.get("data") or {}
+        directory = (data.get("directory") or "").strip()
+        if directory:
+            return await self._db.resolve_project_for_repo(directory)
+        slug = (data.get("slug") or "").strip()
+        if slug:
+            return await self._db.resolve_project_for_topic(slug)
+        title = (data.get("title") or "").strip()
+        if title and _is_useful_session_title(title):
+            return await self._db.resolve_project_for_topic(title)
+        return None
 
     # ── 4. spine write: emit typed events with deterministic hints ──
     async def _append_structured_event(

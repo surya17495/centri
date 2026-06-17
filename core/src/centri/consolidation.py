@@ -142,12 +142,20 @@ class Consolidator:
         ``events`` are expected oldest-first. Returns the number of typed objects
         written (decisions + facts + loop transitions). Emits one
         ``memory.synthesized`` event summarizing the batch when anything changed.
+
+        Low-importance events (tool output, audit noise) are skipped — they
+        carry no durable semantic signal worth promoting to the typed graph.
+        The raw events stay in the spine for provenance; the graph only tracks
+        decisions, facts, and open loops derived from substantive interaction.
         """
         await self._graph.ensure_tables()
         written = 0
         synthesized: List[Dict[str, str]] = []
 
         for ev in events:
+            importance = (ev.get("importance") or "normal").lower()
+            if importance == "low":
+                continue
             eid = ev.get("id") or ev.get("event_id")
             payload = ev.get("payload") or {}
             repo_id = ev.get("repo_id") or payload.get("repo_id")
@@ -320,6 +328,7 @@ class Consolidator:
                     "id": row.get("id"),
                     "type": row.get("type"),
                     "repo_id": row.get("repo_id"),
+                    "importance": row.get("importance"),
                     "payload": payload,
                 }
             )
@@ -693,6 +702,11 @@ class ConsolidationLLMTier:
     def _is_candidate(self, ev: Dict[str, Any]) -> bool:
         etype = ev.get("type") or ""
         if etype in _LLM_TIER_EXCLUDED_TYPES:
+            return False
+        # Skip low-importance events — tool output and audit noise don't carry
+        # enough signal for the LLM to extract meaningful facts or decisions.
+        importance = (ev.get("importance") or "normal").lower()
+        if importance == "low":
             return False
         return not event_has_hints(ev.get("payload") or {})
 

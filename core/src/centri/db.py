@@ -1,8 +1,10 @@
 """CENTRI SQLite database — one file, one schema."""
 
 import asyncio
+import hashlib
 import json
 import logging
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -169,6 +171,22 @@ CREATE TABLE IF NOT EXISTS messages (
     ts TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'topic',
+    ref TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS projects_kind_idx ON projects (kind);
+CREATE INDEX IF NOT EXISTS projects_ref_idx ON projects (ref);
+
+-- The `repo_id` columns on events/threads/sessions are project_id references
+-- (kept under the legacy name to avoid a 100+ site rename). A coding repo is a
+-- project of kind='repo'; research, conversations, voice threads are projects
+-- of other kinds. The repos table retains coding-specific metadata (branch,
+-- ahead/behind) for kind='repo' projects only.
 CREATE TABLE IF NOT EXISTS repos (
     id TEXT PRIMARY KEY,
     root TEXT NOT NULL UNIQUE,
@@ -209,6 +227,14 @@ CREATE TABLE IF NOT EXISTS ingest_state (
 CREATE TABLE IF NOT EXISTS runtime_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS working_memory (
+    thread_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (thread_id, key)
 );
 """
 
@@ -283,6 +309,22 @@ class Database:
             # In case FTS5 is not available or event_fts fails, ignore to prevent breaking the boot
             pass
 
+        # Backfill existing repos into the projects table as kind='repo' so the
+        # universal project scoping picks them up. Idempotent: existing project
+        # ids are preserved.
+        if "repos" in existing and "projects" in existing:
+            from datetime import datetime, timezone
+
+            now_iso = datetime.now(timezone.utc).isoformat()
+            for row in conn.execute(
+                "SELECT id, name, root FROM repos"
+            ).fetchall():
+                conn.execute(
+                    """INSERT OR IGNORE INTO projects (id, name, kind, ref, created_at, updated_at)
+                       VALUES (?, ?, 'repo', ?, ?, ?)""",
+                    (row[0], row[1], row[2], now_iso, now_iso),
+                )
+
     async def _get_conn(self) -> sqlite3.Connection:
         if self._conn is None:
             self._conn = sqlite3.connect(str(self._path))
@@ -306,7 +348,7 @@ class Database:
         thread_id: Optional[str] = None,
         task_id: Optional[str] = None,
         repo_id: Optional[str] = None,
-        importance: str = "low",
+        importance: str = "normal",
         payload: Optional[Dict[str, Any]] = None,
         tenant_id: str = DEFAULT_TENANT,
     ) -> None:
@@ -321,21 +363,42 @@ class Database:
             )
             conn.commit()
 
+    _IMPORTANCE_RANK = {"low": 0, "normal": 1, "high": 2}
+
     async def recent_events(
         self,
         limit: int = 50,
         thread_id: Optional[str] = None,
         tenant_id: str = DEFAULT_TENANT,
+        min_importance: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        """Recent events, newest first.
+
+        ``min_importance`` filters by importance tier when set (e.g. ``"normal"``
+        excludes ``low``-importance tool output and audit noise). ``None`` (the
+        default) returns everything for backward-compatible callers like anaphora
+        resolution, which needs recent turns regardless of importance tier.
+        """
+        importance_clause = ""
+        params: list = []
+        if min_importance and min_importance in self._IMPORTANCE_RANK:
+            threshold = self._IMPORTANCE_RANK[min_importance]
+            allowed = [k for k, v in self._IMPORTANCE_RANK.items() if v >= threshold]
+            placeholders = ",".join("?" for _ in allowed)
+            importance_clause = f" AND importance IN ({placeholders})"
+            params.extend(allowed)
+
         if thread_id:
+            params.extend([tenant_id, thread_id, limit])
             cur = await self._execute(
-                "SELECT * FROM events WHERE tenant_id = ? AND thread_id = ? ORDER BY ts DESC LIMIT ?",
-                (tenant_id, thread_id, limit),
+                f"SELECT * FROM events WHERE tenant_id = ? AND thread_id = ?{importance_clause} ORDER BY ts DESC LIMIT ?",
+                tuple(params),
             )
         else:
+            params.extend([tenant_id, limit])
             cur = await self._execute(
-                "SELECT * FROM events WHERE tenant_id = ? ORDER BY ts DESC LIMIT ?",
-                (tenant_id, limit),
+                f"SELECT * FROM events WHERE tenant_id = ?{importance_clause} ORDER BY ts DESC LIMIT ?",
+                tuple(params),
             )
         return [dict(row) for row in cur.fetchall()]
 
@@ -345,38 +408,81 @@ class Database:
         after_id: str = "",
         limit: int = 100,
         tenant_id: str = DEFAULT_TENANT,
+        min_importance: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Return the next spine events after a timestamp, oldest first.
 
         Scheduler consolidation needs a bounded forward scan. Using recent_events()
         would fetch newest-first and can skip older imported rows when the backlog is
         larger than the fetch limit.
+
+        ``min_importance`` filters by importance tier when set. The default (``None``)
+        returns everything, which is what the consolidation rebuild path needs — the
+        deterministic tier then applies its own importance filter during promotion.
         """
+        importance_clause = ""
+        params: list = []
+        if min_importance and min_importance in self._IMPORTANCE_RANK:
+            threshold = self._IMPORTANCE_RANK[min_importance]
+            allowed = [k for k, v in self._IMPORTANCE_RANK.items() if v >= threshold]
+            placeholders = ",".join("?" for _ in allowed)
+            importance_clause = f" AND importance IN ({placeholders})"
+            params.extend(allowed)
+
         if after_ts:
+            params.extend([tenant_id, after_ts, after_ts, after_id, limit])
             cur = await self._execute(
-                "SELECT * FROM events WHERE tenant_id = ? AND (ts > ? OR (ts = ? AND id > ?)) ORDER BY ts ASC, id ASC LIMIT ?",
-                (tenant_id, after_ts, after_ts, after_id, limit),
+                f"SELECT * FROM events WHERE tenant_id = ? AND (ts > ? OR (ts = ? AND id > ?)){importance_clause} ORDER BY ts ASC, id ASC LIMIT ?",
+                tuple(params),
             )
         else:
+            params.extend([tenant_id, limit])
             cur = await self._execute(
-                "SELECT * FROM events WHERE tenant_id = ? ORDER BY ts ASC, id ASC LIMIT ?",
-                (tenant_id, limit),
+                f"SELECT * FROM events WHERE tenant_id = ?{importance_clause} ORDER BY ts ASC, id ASC LIMIT ?",
+                tuple(params),
             )
         return [dict(row) for row in cur.fetchall()]
 
-    async def search_events(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    async def search_events(
+        self,
+        query: str,
+        limit: int = 10,
+        min_importance: str = "normal",
+    ) -> List[Dict[str, Any]]:
+        """Verbatim FTS recall, filtered to durable signal.
+
+        ``min_importance='normal'`` (the default) excludes ``low``-importance
+        events (tool output, audit noise) so verbatim recall surfaces real
+        transcript and decisions, not shell-command snippets. Pass
+        ``min_importance='low'`` to search the full spine.
+
+        ``consolidation.*`` event sources are always excluded: they are the
+        memory system talking to itself (proposal applied/rejected, batch
+        summaries) and never belong in user-facing verbatim recall.
+        """
         try:
+            # Importance ordering: low < normal < high. We keep everything at or
+            # above the threshold by mapping to an explicit set.
+            allowed = {
+                "low": {"low", "normal", "high"},
+                "normal": {"normal", "high"},
+                "high": {"high"},
+            }[min_importance]
+            placeholders = ",".join("?" for _ in allowed)
             cur = await self._execute(
-                """
+                f"""
                 SELECT events.id AS event_id, event_fts.text, event_fts.type,
                        event_fts.source, events.thread_id
                 FROM event_fts
                 JOIN events ON events.rowid = event_fts.rowid
                 WHERE event_fts MATCH ?
+                  AND events.importance IN ({placeholders})
+                  AND events.source NOT LIKE 'consolidation%'
+                  AND events.source NOT LIKE 'memory%'
                 ORDER BY bm25(event_fts) ASC
                 LIMIT ?
                 """,
-                (query, limit),
+                (query, *allowed, limit),
             )
             return [dict(row) for row in cur.fetchall()]
         except sqlite3.OperationalError as e:
@@ -663,6 +769,192 @@ class Database:
         row = cur.fetchone()
         return dict(row) if row else None
 
+    # projects
+    async def upsert_project(
+        self,
+        project_id: str,
+        name: str,
+        kind: str = "topic",
+        ref: Optional[str] = None,
+        created_at: Optional[str] = None,
+        updated_at: Optional[str] = None,
+    ) -> str:
+        ts = created_at or _now_iso()
+        upd = updated_at or ts
+        await self._execute(
+            """INSERT INTO projects (id, name, kind, ref, created_at, updated_at)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET name=excluded.name, kind=excluded.kind, ref=excluded.ref, updated_at=excluded.updated_at""",
+            (project_id, name, kind, ref, ts, upd),
+        )
+        return project_id
+
+    async def get_project(self, project_id: str) -> Optional[Dict[str, Any]]:
+        cur = await self._execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    async def get_project_by_ref(self, kind: str, ref: str) -> Optional[Dict[str, Any]]:
+        cur = await self._execute(
+            "SELECT * FROM projects WHERE kind = ? AND ref = ? LIMIT 1",
+            (kind, ref),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    async def resolve_project_for_repo(
+        self, root: str, name: Optional[str] = None, branch: Optional[str] = None
+    ) -> str:
+        """Resolve a repo path to a project id, creating both rows if absent.
+
+        Coding repos are double-bookkept: a `repos` row holds the coding-specific
+        metadata (branch, ahead/behind), and a `projects` row of kind='repo' is
+        the universal scoping reference. The project's `ref` is the repo root so
+        a single lookup by path resolves the project.
+        """
+        existing = await self.get_project_by_ref("repo", root)
+        if existing:
+            return existing["id"]
+        repo_name = name or Path(root).name or "repo"
+        project_id = f"repo:{repo_name}:{hashlib.sha1(root.encode()).hexdigest()[:8]}"
+        await self.upsert_project(project_id, repo_name, kind="repo", ref=root)
+        await self.upsert_repo(
+            repo_id=project_id,
+            root=root,
+            name=repo_name,
+            branch=branch,
+            last_seen=_now_iso(),
+        )
+        return project_id
+
+    async def resolve_project_for_topic(self, topic: str, name: Optional[str] = None) -> str:
+        """Resolve an arbitrary topic/slug to a project id, creating it if absent.
+
+        Used by non-coding ingest paths (OpenCode sessions without a directory,
+        voice conversations, research threads). The `ref` is the topic slug so
+        repeated ingest of the same topic resolves to the same project.
+        """
+        slug = re.sub(r"[^a-z0-9]+", "-", (topic or "").lower()).strip("-") or "untitled"
+        existing = await self.get_project_by_ref("topic", slug)
+        if existing:
+            return existing["id"]
+        project_id = f"topic:{slug}:{hashlib.sha1(slug.encode()).hexdigest()[:8]}"
+        await self.upsert_project(project_id, name or slug, kind="topic", ref=slug)
+        return project_id
+
+    async def backfill_project_ids(self) -> Dict[str, int]:
+        """Backfill ``repo_id`` (project_id) on events that lack one.
+
+        Events ingested before project-keyed scoping was added have an empty
+        ``repo_id``. This method resolves a project for each by looking at the
+        event's ``thread_id`` (session) — if the session's payload or the event
+        payload carries a ``directory`` field, that resolves to a repo project;
+        otherwise it falls back to a topic project from the session title or
+        the event payload. Returns a count dict: ``{resolved, skipped}``.
+        """
+        import json as _json
+
+        cur = await self._execute(
+            "SELECT id, thread_id, source, payload_json FROM events WHERE repo_id IS NULL OR repo_id = ''"
+        )
+        rows = cur.fetchall()
+        resolved = 0
+        skipped = 0
+
+        # Build a thread_id → project_id cache so each session is resolved once.
+        thread_cache: Dict[str, Optional[str]] = {}
+
+        for row in rows:
+            thread_id = row["thread_id"] or ""
+
+            # Try the thread cache first.
+            if thread_id and thread_id in thread_cache:
+                project_id = thread_cache[thread_id]
+            else:
+                project_id = None
+
+                # Look up the session row for directory/title metadata.
+                if thread_id:
+                    srow = await self._execute(
+                        "SELECT payload_json FROM sessions WHERE id = ?", (thread_id,)
+                    )
+                    sresult = srow.fetchone()
+                    if sresult:
+                        try:
+                            spayload = _json.loads(sresult["payload_json"]) if sresult["payload_json"] else {}
+                        except (TypeError, ValueError):
+                            spayload = {}
+                        directory = (spayload.get("directory") or "").strip()
+                        if directory:
+                            project_id = await self.resolve_project_for_repo(directory)
+                        else:
+                            title = (spayload.get("title") or "").strip()
+                            if title:
+                                project_id = await self.resolve_project_for_topic(title)
+
+                # Fall back to the event payload itself.
+                if not project_id:
+                    try:
+                        payload = _json.loads(row["payload_json"]) if isinstance(row["payload_json"], str) else (row["payload_json"] or {})
+                    except (TypeError, ValueError):
+                        payload = {}
+                    if isinstance(payload, dict):
+                        directory = (payload.get("directory") or "").strip()
+                        if directory:
+                            project_id = await self.resolve_project_for_repo(directory)
+                        else:
+                            slug = (payload.get("slug") or "").strip()
+                            title = (payload.get("title") or "").strip()
+                            if slug:
+                                project_id = await self.resolve_project_for_topic(slug)
+                            elif title:
+                                project_id = await self.resolve_project_for_topic(title)
+
+                if thread_id:
+                    thread_cache[thread_id] = project_id
+
+            if project_id:
+                await self._execute(
+                    "UPDATE events SET repo_id = ? WHERE id = ?",
+                    (project_id, row["id"]),
+                )
+                resolved += 1
+            else:
+                skipped += 1
+
+        return {"resolved": resolved, "skipped": skipped}
+
+    # working memory — the "what am I doing right now" store
+    async def set_working_context(self, thread_id: str, key: str, value: str) -> None:
+        """Store a working-memory entry for the active thread.
+
+        Working memory holds short-lived context that bridges turns within a
+        session — the current task, unresolved sub-questions, active files —
+        so mid-session continuity doesn't depend on re-deriving state from
+        the full spine. Entries are keyed by ``(thread_id, key)`` and
+        upserted, so re-setting the same key updates in place.
+        """
+        await self._execute(
+            "INSERT INTO working_memory (thread_id, key, value, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(thread_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            (thread_id, key, value, _now_iso()),
+        )
+
+    async def get_working_context(self, thread_id: str) -> Dict[str, str]:
+        """Read all working-memory entries for a thread."""
+        cur = await self._execute(
+            "SELECT key, value FROM working_memory WHERE thread_id = ?",
+            (thread_id,),
+        )
+        return {row["key"]: row["value"] for row in cur.fetchall()}
+
+    async def clear_working_context(self, thread_id: str) -> None:
+        """Discard all working-memory entries for a thread (on session end)."""
+        await self._execute(
+            "DELETE FROM working_memory WHERE thread_id = ?",
+            (thread_id,),
+        )
+
     # sessions
     async def upsert_session(
         self,
@@ -737,3 +1029,9 @@ class Database:
     async def get_all_setting_overrides(self) -> Dict[str, str]:
         cur = await self._execute("SELECT key, value FROM runtime_settings")
         return {row["key"]: row["value"] for row in cur.fetchall()}
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()

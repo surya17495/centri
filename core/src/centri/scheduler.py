@@ -65,7 +65,7 @@ class Scheduler:
         # Deterministic consolidation can embed one vector per hinted event. Keep
         # each scheduler tick bounded so a large import backlog cannot monopolize
         # the async server loop.
-        self._consolidation_batch = 16
+        self._consolidation_batch = 32
         # High-water mark: only consolidate events after this (ts, id) cursor.
         self._last_consolidated_ts: str = ""
         self._last_consolidated_id: str = ""
@@ -216,6 +216,7 @@ class Scheduler:
                     "id": row.get("id"),
                     "type": row.get("type"),
                     "repo_id": row.get("repo_id"),
+                    "importance": row.get("importance"),
                     "payload": payload,
                     "_ts": ts,
                 }
