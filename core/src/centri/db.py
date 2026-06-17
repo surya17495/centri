@@ -368,7 +368,8 @@ class Database:
         try:
             cur = await self._execute(
                 """
-                SELECT events.id AS event_id, event_fts.text, event_fts.type, event_fts.source
+                SELECT events.id AS event_id, event_fts.text, event_fts.type,
+                       event_fts.source, events.thread_id
                 FROM event_fts
                 JOIN events ON events.rowid = event_fts.rowid
                 WHERE event_fts MATCH ?

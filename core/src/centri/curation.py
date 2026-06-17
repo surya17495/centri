@@ -1014,7 +1014,8 @@ class Ambient:
     def is_empty(self) -> bool:
         return not (self.user_profile or self.identity or self.active_projects or self.open_loops or self.narrative)
 
-    def render(self, budget: int, counter: Optional[TokenCounter] = None) -> str:
+    def render(self, budget: int, counter: Optional[TokenCounter] = None,
+               cue_terms: Optional[set] = None) -> str:
         counter = counter or default_token_counter()
         lines: List[str] = []
         if self.user_profile:
@@ -1026,9 +1027,14 @@ class Ambient:
         if self.active_projects:
             lines.append("Active: " + "; ".join(self.active_projects))
         if self.open_loops:
-            lines.append("Top open loops: " + "; ".join(self.open_loops))
-        if self.narrative:
-            lines.append(self.narrative)
+            ranked = list(self.open_loops)
+            if cue_terms:
+                ranked.sort(
+                    key=lambda s: len(set(_tokens(s)) & cue_terms),
+                    reverse=True,
+                )
+            top = ranked[:3]
+            lines.append("Top open loops: " + "; ".join(top))
         block = "\n".join(lines)
         # Trim to budget deterministically: drop whole words from the end until
         # the real token count fits. Word boundaries keep the trim readable while
@@ -1102,6 +1108,7 @@ class VerbatimMatch:
     type: str
     source: str
     event_id: str
+    thread_id: Optional[str] = None
 
 
 @dataclass
@@ -1137,7 +1144,8 @@ class CuratedBrief:
         ``with_receipts=True`` appends ``[source_event_id]`` for the on-demand
         explainability view."""
         out: List[str] = []
-        amb = self.ambient.render(ambient_budget, counter)
+        cue_terms = self.cue.term_set() if self.cue else None
+        amb = self.ambient.render(ambient_budget, counter, cue_terms=cue_terms)
         if amb:
             out.append(amb)
             out.append("")
@@ -1204,6 +1212,7 @@ async def curate(
     repo_id: Optional[str] = None,
     counter: Optional[TokenCounter] = None,
     embedding_provider: Optional[EmbeddingProvider] = None,
+    thread_id: Optional[str] = None,
 ) -> CuratedBrief:
     """Pure, versioned curation: ``brief = curate(graph, cue, budget, version)``.
 
@@ -1250,21 +1259,33 @@ async def curate(
                             type=r["type"],
                             source=r["source"],
                             event_id=r["event_id"],
+                            thread_id=r.get("thread_id"),
                         )
                     )
             except Exception:
                 pass
 
-    # Apply the same obsolete history filtering to verbatim event matches: HAL/Hermes/
-    # mempalace events stay out of the brief unless the cue asks for them explicitly. The
-    # source check catches obsolete provenance; the text check also drops matches
-    # whose content names an obsolete system even under a neutral source.
+    # Exclude verbatim matches from the current thread — they are already in
+    # context (circular recall). Also apply obsolete-history filtering.
     if not _cue_asks_for_legacy(cue):
         verbatim = [
             v
             for v in verbatim
             if not _is_legacy_source(v.source) and not _text_mentions_legacy(v.text)
         ]
+
+    # Exclude verbatim matches from the current thread — they are already in
+    # context (circular recall).
+    if thread_id:
+        verbatim = [v for v in verbatim if v.thread_id != thread_id]
+
+    # Dedup by first 200 chars — same text appears in multiple event types
+    # (hermes.user.message, user.utterance, hermes.tool.result). Keep first.
+    _seen = set()
+    verbatim = [
+        v for v in verbatim
+        if (hash(v.text[:200]) not in _seen and not _seen.add(hash(v.text[:200])))
+    ]
 
     return CuratedBrief(
         policy_version=policy_version,
@@ -1463,5 +1484,6 @@ class Curator:
             repo_id=repo_id,
             counter=self._counter,
             embedding_provider=self._embeddings,
+            thread_id=thread_id,
         )
         return brief, candidates, cue
