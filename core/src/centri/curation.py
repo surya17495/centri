@@ -106,12 +106,10 @@ LEGACY_TAGS = frozenset({"hermes", "hal", "mempalace"})
 # Cue tokens that opt into legacy surfacing. When any of these appear in the
 # cue's term set, legacy items are NOT suppressed — the user is asking about
 # old memory and should see it.
-_LEGACY_CUE_TOKENS = frozenset({"hal", "hermes", "mempalace", "hindsight", "legacy"})
+_LEGACY_CUE_TOKENS = frozenset({"hal", "hermes", "mempalace", "hindsight"})
 
-# Text tokens that mark a line as legacy-mentioning. The cue opt-in set above
-# also includes the generic word "legacy"; text suppression is narrower so a
-# convention that merely talks about a "legacy migration" is not blanked out —
-# only prose that names HAL/Hermes/mempalace/Hindsight by name is dropped.
+# Text tokens that mark a line as legacy-mentioning. Only prose that names
+# HAL/Hermes/mempalace/Hindsight by name is dropped.
 _LEGACY_TEXT_TOKENS = frozenset({"hal", "hermes", "mempalace", "hindsight"})
 
 
@@ -133,6 +131,9 @@ def _cue_asks_for_legacy(cue: "Cue") -> bool:
     into legacy-surfacing mode on its own, or every neighbor of a legacy node
     would unsuppress HAL/Hindsight and the ambient header would leak again.
     """
+    raw_lower = (cue.raw or "").lower()
+    if "old memory stack" in raw_lower:
+        return True
     user_terms = set(_tokens(cue.raw)) | set(cue.anaphora_terms)
     return bool(_LEGACY_CUE_TOKENS & user_terms)
 
@@ -976,14 +977,13 @@ async def gather_candidates(
             )
         )
 
-    # Legacy suppression: when Centri is the active memory provider, items
-    # ingested from HAL/Hermes/mempalace are treated as legacy and removed
-    # from the candidate pool unless the cue explicitly mentions them. The tag
-    # check catches legacy-provenance nodes; the text check also drops items
-    # whose statement/topic names a legacy system (e.g. synthesis decisions
-    # tagged ``hal.skill`` or carrying HAL/Hindsight prose), so the rendered
-    # "Decisions already made / Open loops" sections stay clean for non-legacy
-    # cues.
+    # Obsolete project history filtering: when Centri is the active memory provider, items
+    # ingested from HAL/Hermes/mempalace are treated as obsolete and filtered
+    # from the candidate pool to maintain current context relevance, unless the cue
+    # explicitly mentions them. The tag check catches obsolete-provenance nodes; the
+    # text check also drops items whose statement/topic names an obsolete system (e.g.
+    # synthesis decisions tagged ``hal.skill`` or carrying HAL/Hindsight prose), so
+    # the rendered "Decisions already made / Open loops" sections stay clean.
     if not _cue_asks_for_legacy(cue):
         cands = [
             c
@@ -1220,10 +1220,11 @@ async def curate(
     repo_id = repo_id if repo_id is not None else cue.repo_id
 
     ambient = await load_ambient(graph, repo_id=repo_id)
-    # Suppress legacy HAL/Hermes/mempalace/Hindsight from the ambient header
+    # Filter obsolete HAL/Hermes/mempalace/Hindsight history from the ambient header
     # (User Profile / Who/conventions / Top open loops / Recent memory) unless
-    # the cue is asking about a legacy system. Mirrors gather_candidates' tag
-    # filter for the cued section; the stored digest rows stay as audit history.
+    # the cue is asking about them. Maintain current context relevance by default.
+    # Mirrors gather_candidates' tag filter for the cued section; the stored digest
+    # rows stay as audit history.
     if not _cue_asks_for_legacy(cue):
         ambient = _suppress_ambient_legacy(ambient)
     candidates = await gather_candidates(graph, cue, repo_id)
@@ -1254,10 +1255,10 @@ async def curate(
             except Exception:
                 pass
 
-    # Apply the same legacy suppression to verbatim event matches: HAL/Hermes/
-    # mempalace events stay out of the brief unless the cue asks for them. The
-    # source check catches legacy provenance; the text check also drops matches
-    # whose content names a legacy system even under a neutral source.
+    # Apply the same obsolete history filtering to verbatim event matches: HAL/Hermes/
+    # mempalace events stay out of the brief unless the cue asks for them explicitly. The
+    # source check catches obsolete provenance; the text check also drops matches
+    # whose content names an obsolete system even under a neutral source.
     if not _cue_asks_for_legacy(cue):
         verbatim = [
             v

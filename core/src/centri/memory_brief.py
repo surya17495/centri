@@ -31,7 +31,7 @@ from centri.memory_graph import (
 )
 
 LEGACY_TAGS = frozenset({"hermes", "hal", "mempalace"})
-_LEGACY_CUE_TOKENS = frozenset({"hal", "hermes", "mempalace", "hindsight", "legacy"})
+_LEGACY_CUE_TOKENS = frozenset({"hal", "hermes", "mempalace", "hindsight"})
 
 
 def _is_legacy(tags: list[str]) -> bool:
@@ -119,7 +119,7 @@ class MemoryBriefAssembler:
         cue_tokens = _tokens(cue)
         await self._graph.ensure_tables()
 
-        asks_legacy = bool(_LEGACY_CUE_TOKENS & set(cue_tokens))
+        asks_legacy = "old memory stack" in (cue or "").lower() or bool(_LEGACY_CUE_TOKENS & set(cue_tokens))
 
         all_decisions = await self._graph.current_decisions(repo_id=repo_id)
         if not asks_legacy:

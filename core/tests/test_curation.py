@@ -448,14 +448,14 @@ class TestCurator:
 
 
 # ---------------------------------------------------------------------------
-# Legacy suppression — HAL/Hermes/mempalace items treated as legacy
+# Obsolete project history filtering — HAL/Hermes/mempalace items treated as obsolete
 # ---------------------------------------------------------------------------
-class TestLegacySuppression:
+class TestObsoleteProjectHistoryFiltering:
     """When Centri is the active memory provider, items ingested from HAL,
-    Hermes, or mempalace are suppressed from the brief unless the cue
-    explicitly mentions them."""
+    Hermes, or mempalace are filtered out of the brief to maintain current context
+    relevance, unless the cue explicitly mentions them."""
 
-    async def test_legacy_fact_suppressed_from_brief(self, graph):
+    async def test_obsolete_fact_filtered_from_brief(self, graph):
         await graph.add_fact(
             Fact(
                 id="lf1",
@@ -482,7 +482,7 @@ class TestLegacySuppression:
         assert "Centri uses event-sourced" in rendered
         assert "Hermes" not in rendered
 
-    async def test_legacy_fact_surfaces_when_cue_mentions_legacy(self, graph):
+    async def test_obsolete_fact_surfaces_when_cue_mentions_system(self, graph):
         await graph.add_fact(
             Fact(
                 id="lf1",
@@ -498,7 +498,7 @@ class TestLegacySuppression:
         rendered = brief.render()
         assert "Hermes" in rendered
 
-    async def test_legacy_fact_excluded_from_candidates(self, graph):
+    async def test_obsolete_fact_excluded_from_candidates(self, graph):
         await graph.add_fact(
             Fact(
                 id="lf1",
@@ -525,7 +525,7 @@ class TestLegacySuppression:
         assert not any("lf1" in k for k in keys)
         assert any("f1" in k for k in keys)
 
-    async def test_legacy_fact_included_when_cue_mentions_hal(self, graph):
+    async def test_obsolete_fact_included_when_cue_mentions_hal(self, graph):
         await graph.add_fact(
             Fact(
                 id="lf1",
@@ -540,7 +540,7 @@ class TestLegacySuppression:
         cands = await gather_candidates(graph, cue, None)
         assert any("lf1" in c.key for c in cands)
 
-    async def test_mempalace_tag_suppressed(self, graph):
+    async def test_mempalace_tag_filtered(self, graph):
         await graph.add_fact(
             Fact(
                 id="mp1",
@@ -555,9 +555,9 @@ class TestLegacySuppression:
         brief = await curate(graph, cue)
         assert "mempalace" not in brief.render().lower()
 
-    async def test_non_legacy_ingest_not_suppressed(self, graph):
-        # The "ingest" tag alone is NOT legacy — opencode/claude_code/cursor all
-        # use it. Only hermes/hal/mempalace mark legacy provenance.
+    async def test_non_obsolete_ingest_not_filtered(self, graph):
+        # The "ingest" tag alone is NOT obsolete — opencode/claude_code/cursor all
+        # use it. Only hermes/hal/mempalace mark obsolete provenance.
         await graph.add_fact(
             Fact(
                 id="oc1",
@@ -573,7 +573,7 @@ class TestLegacySuppression:
         assert "fly.io" in brief.render()
 
     async def test_golden_snapshot_unaffected(self, graph):
-        # The golden seed has no legacy-tagged items, so the brief is unchanged.
+        # The golden seed has no obsolete-tagged items, so the brief is unchanged.
         await _seed(graph)
         cue = await CueBuilder(graph).build("what's our jwt refresh and testing setup")
         brief = await curate(graph, cue)
@@ -581,22 +581,19 @@ class TestLegacySuppression:
 
 
 # ---------------------------------------------------------------------------
-# Legacy suppression in the /memory/recall brief render path (ambient header)
+# Current context relevance and obsolete project history filtering in the ambient header
 # ---------------------------------------------------------------------------
-class TestLegacyAmbientHeaderSuppression:
+class TestCurrentContextRelevanceAmbientHeader:
     """Regression: /memory/recall builds its header from the ambient digest
     (User Profile / Who-conventions / Top open loops / Recent memory) and then
-    the cued Decisions / Open-loops sections. The prior legacy-suppression fix
-    covered ``gather_candidates`` and the fallback ``MemoryBriefAssembler`` but
-    NOT this render path, so a non-legacy cue still got HAL/Hindsight lines in
-    the header. These drive the real ``Curator.assemble`` -> ``brief.render()``
-    path (what ``_recall_response`` maps to ``markdown``) and assert the header
-    stays clean unless the cue explicitly asks for legacy history.
+    the cued Decisions / Open-loops sections. Obsolete project history filtering
+    should ensure the header stays clean of obsolete systems unless the cue
+    explicitly asks for them by name.
     """
 
     _AMBIENT_DIGEST = {
         # Written by consolidation._refresh_ambient from convention facts; the
-        # HAL one must be dropped for a non-legacy cue, the clean one kept.
+        # HAL one must be dropped for a non-explicit cue, the clean one kept.
         "identity": [
             "HAL namespace convention: HAL skills live under hal.skill",
             "testing: integration tests hit a real database, never mocks",
@@ -623,7 +620,7 @@ class TestLegacyAmbientHeaderSuppression:
                 tags=[AMBIENT_TAG],
             )
         )
-        # Legacy-provenance decision (tagged) — already caught by the tag filter;
+        # Obsolete-provenance decision (tagged) — already caught by the tag filter;
         # included so the full render path is exercised end-to-end.
         await g.add_decision(
             Decision(
@@ -640,7 +637,7 @@ class TestLegacyAmbientHeaderSuppression:
         # Synthesized HAL decision whose tag is NOT in LEGACY_TAGS (``hal.skill``
         # != ``hal``) and whose topic shares a token with memory cues. The tag
         # filter misses it; the text filter must drop it, and its topic must not
-        # flip the cue into legacy mode via the graph hop.
+        # flip the cue into obsolete-retrieval mode via the graph hop.
         await g.add_decision(
             Decision(
                 id="ld2",
@@ -653,7 +650,7 @@ class TestLegacyAmbientHeaderSuppression:
                 tags=["hal.skill"],
             )
         )
-        # Legacy open loop (tagged mempalace).
+        # Obsolete open loop (tagged mempalace).
         await g.add_open_loop(
             OpenLoop(
                 id="ll1",
@@ -690,14 +687,14 @@ class TestLegacyAmbientHeaderSuppression:
         )
         return Curator(g, settings=None)
 
-    async def test_non_legacy_cue_omits_hal_from_header_and_sections(self, graph):
+    async def test_non_obsolete_cue_omits_hal_from_header_and_sections(self, graph):
         curator = await self._seed(graph)
         # The actual /memory/recall path: Curator.assemble -> CuratedBrief.
         brief, _cands, _cue = await curator.assemble(
             "futures-agent current work live sim memory continuity"
         )
         md = brief.render()
-        # The cue never names a legacy system, so the brief must not leak any.
+        # The cue never names an obsolete system explicitly, so the brief must not leak any.
         for needle in (
             "HALMemory",
             "Hindsight",
@@ -709,7 +706,7 @@ class TestLegacyAmbientHeaderSuppression:
             "mempalace",
             "Hermes",
         ):
-            assert needle not in md, f"legacy leakage {needle!r} in brief:\n{md}"
+            assert needle not in md, f"obsolete leakage {needle!r} in brief:\n{md}"
         # Ambient header is still rendered (clean identity + open loop survive).
         assert "Who/conventions:" in md, md
         assert "integration tests hit a real database" in md, md
@@ -717,32 +714,60 @@ class TestLegacyAmbientHeaderSuppression:
         # Clean Centri memory content still surfaces in the cued section.
         assert "event-sourced spine" in md, md
 
-    async def test_explicit_hal_cue_surfaces_legacy_history(self, graph):
+    async def test_explicit_hal_cue_surfaces_obsolete_history(self, graph):
         curator = await self._seed(graph)
         brief, _cands, _cue = await curator.assemble("tell me about the HAL memory setup")
         md = brief.render()
         # The user explicitly asked about HAL, so the ambient header keeps the
-        # HAL open loops (and the legacy decisions are candidates again).
+        # HAL open loops.
         assert "HALMemory" in md, md
 
-    async def test_graph_hop_neighbor_does_not_unsuppress_legacy(self, graph):
-        # A legacy decision whose topic shares "memory" with the cue must NOT
-        # pull "hal" into the cue's explicit-mention set and unsuppress HAL.
+    async def test_graph_hop_neighbor_does_not_unfilter_obsolete(self, graph):
+        # An obsolete decision whose topic shares "memory" with the cue must NOT
+        # pull "hal" into the cue's explicit-mention set and unfilter obsolete history.
         curator = await self._seed(graph)
         brief, _cands, cue = await curator.assemble("memory continuity")
         # Sanity: the graph hop DID pull the neighbor topic token into terms…
         assert "hal" in cue.terms or "init" in cue.terms, cue.terms
-        # …yet the brief still suppresses legacy because the user did not name it.
+        # …yet the brief still filters obsolete history because the user did not name it explicitly.
         md = brief.render()
         for needle in ("HALMemory", "hal.skill", "Hindsight", "HAL namespace"):
-            assert needle not in md, f"legacy leakage {needle!r} in brief:\n{md}"
+            assert needle not in md, f"obsolete leakage {needle!r} in brief:\n{md}"
+
+    async def test_complaining_about_suppress_legacy_comment_does_not_unhide_legacy(self, graph):
+        curator = await self._seed(graph)
+        # The user complains using the word "legacy" but not explicit system names.
+        brief, _cands, _cue = await curator.assemble(
+            "Fix it and also wtf is that supress legacy comment, what does it make sense for people, it should just work continuosly and update itself"
+        )
+        md = brief.render()
+        # Verify no obsolete systems/components are returned.
+        for needle in (
+            "HALMemory",
+            "Hindsight",
+            "hal.skill",
+            "HAL namespace",
+            "HAL helper",
+            "HAL memory",
+            "HAL event",
+            "mempalace",
+            "Hermes",
+        ):
+            assert needle not in md, f"obsolete leakage {needle!r} in brief:\n{md}"
+
+    async def test_explicit_query_can_retrieve_obsolete_history(self, graph):
+        curator = await self._seed(graph)
+        brief, _cands, _cue = await curator.assemble("HAL memory old integration issue")
+        md = brief.render()
+        # Explicit query contains HAL, so HAL history should be retrieved.
+        assert "HALMemory" in md or "HAL namespace" in md, f"Missing HAL history in brief:\n{md}"
 
 
 # ---------------------------------------------------------------------------
-# MemoryBriefAssembler legacy suppression (fallback path)
+# MemoryBriefAssembler obsolete history filtering (fallback path)
 # ---------------------------------------------------------------------------
-class TestMemoryBriefLegacySuppression:
-    async def test_legacy_fact_suppressed_in_fallback_assembler(self, graph):
+class TestMemoryBriefObsoleteProjectHistoryFiltering:
+    async def test_obsolete_fact_filtered_in_fallback_assembler(self, graph):
         from centri.memory_brief import MemoryBriefAssembler
 
         await graph.add_fact(
@@ -770,7 +795,7 @@ class TestMemoryBriefLegacySuppression:
         assert "docker compose" in rendered
         assert "hermes" not in rendered.lower()
 
-    async def test_legacy_fact_surfaces_in_fallback_when_cue_mentions_legacy(self, graph):
+    async def test_obsolete_fact_surfaces_in_fallback_when_cue_mentions_system(self, graph):
         from centri.memory_brief import MemoryBriefAssembler
 
         await graph.add_fact(
@@ -788,10 +813,10 @@ class TestMemoryBriefLegacySuppression:
 
 
 # ---------------------------------------------------------------------------
-# Legacy open-loop reconciliation
+# Obsolete open-loop reconciliation
 # ---------------------------------------------------------------------------
-class TestReconcileLegacyLoops:
-    async def test_legacy_loops_closed_non_destructive(self, graph):
+class TestReconcileObsoleteLoops:
+    async def test_obsolete_loops_closed_non_destructive(self, graph):
         from centri.memory_graph import LOOP_DONE, LOOP_OPEN
 
         await graph.add_open_loop(
@@ -830,11 +855,11 @@ class TestReconcileLegacyLoops:
         assert legacy1.state == LOOP_DONE
         assert legacy2.state == LOOP_DONE
 
-        # Non-legacy loop untouched.
+        # Non-obsolete loop untouched.
         normal = await graph.get_open_loop("nl1")
         assert normal.state == LOOP_OPEN
 
-    async def test_no_legacy_loops_returns_zero(self, graph):
+    async def test_no_obsolete_loops_returns_zero(self, graph):
         await graph.add_open_loop(
             OpenLoop(
                 id="nl1",
