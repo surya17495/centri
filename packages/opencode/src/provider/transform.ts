@@ -683,7 +683,6 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
     id.includes("deepseek-r1") ||
     id.includes("deepseek-v3") ||
     id.includes("minimax") ||
-    id.includes("glm") ||
     id.includes("kimi") ||
     id.includes("k2p") ||
     id.includes("qwen") ||

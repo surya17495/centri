@@ -48,6 +48,8 @@ Fork delta (memory-native shell):
   message, tool, permission events → batched → /events/import.  (1fc4f2c)
 - Per-turn cued recall injected into the system[] array (// CENTRI marked). (dbcb11e)
 - session/prompt/centri.txt — Centri identity, appended for all providers. (03bc960)
+- Ambient memory URL is auto-appended to OpenCode's remote instruction loader
+  when CENTRI_URL is set.                            (working tree)
 - Rebrand "opencode" → "Centri" in the app shell.  (fdc9a99)
 - docs/centri-app.md — integration notes.          (d7bd87c)
 
@@ -63,8 +65,8 @@ Also done: build-ship post drafted (short + long), shared with Raghu.
         4) reopen, ask "where did we leave off?" → expect a receipted brief
 - [ ] Optional UI "Recalled N memories" chip — NOT built (cancelled to save credits).
 - [ ] Recall latency vs the 800ms fail-open budget — not measured on real machine.
-- [ ] Ambient-URL wiring in opencode.json (instructions: ["<core>/memory/ambient.md?token=..."])
-      — endpoint exists; confirm the app is configured to fetch it.
+- [x] Ambient-URL wiring in the native instruction loader; no opencode.json
+      edit required. Verify fetched content in a live model request.
 - Pre-existing unrelated test failures noted by Track A: test_discover_endpoint_shape,
   test_embed_leaves_already_prefixed_model_unchanged (sandbox-env, not bridge).
 
@@ -73,7 +75,7 @@ Also done: build-ship post drafted (short + long), shared with Raghu.
    in the // CENTRI patches.
 2. Run the end-to-end demo loop above on a real machine; capture the recall output
    with receipts as the demo artifact.
-3. Wire opencode.json ambient instructions URL; confirm session-start fetch.
+3. Confirm ambient memory text appears in a live model request.
 4. If time: the "Recalled N memories" chip (message-v2 memory part + web UI).
 5. Stretch later (post-hackathon, from ROADMAP): import onboarding (HAL/OpenCode/
    mempalace), voice channel, non-coding tools.

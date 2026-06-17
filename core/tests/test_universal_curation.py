@@ -284,10 +284,10 @@ class TestUniversalCuration:
         db, g = graph_db
         await _seed(g)
         coord, _ = _make_coordinator(db, g, hot_cache=_ColdCache())
-        await coord.handle_utterance("jwt refresh please", user_id="u")
-        first = coord._last_curated_brief.render(with_receipts=True)
-        await coord.handle_utterance("jwt refresh please", user_id="u")
-        second = coord._last_curated_brief.render(with_receipts=True)
+        first_brief, _, _ = await coord._curator.assemble("jwt refresh please")
+        first = first_brief.render(with_receipts=True)
+        second_brief, _, _ = await coord._curator.assemble("jwt refresh please")
+        second = second_brief.render(with_receipts=True)
         assert first == second, "same (graph, cue, budget, policy) must render byte-identical"
 
     async def test_live_curator_overrides_stale_warm_cache(self, graph_db):

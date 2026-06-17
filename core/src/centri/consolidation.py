@@ -41,9 +41,11 @@ from centri.consolidation_prompt import (
     OP_OPEN_LOOP,
     OP_SCHEMA,
     OP_SUPERSEDE,
+    OP_PROFILE_UPDATE,
     LiveDigest,
     build_messages,
     parse_ops,
+    _event_text,
 )
 from centri.memory_graph import (
     KIND_DECISION,
@@ -511,6 +513,25 @@ def _similar(a: str, b: str, threshold: float = 0.8) -> bool:
     return union > 0 and (inter / union) >= threshold
 
 
+def _normalize_text(text: str) -> str:
+    import string
+    text = (text or "").lower()
+    translator = str.maketrans("", "", string.punctuation)
+    text = text.translate(translator)
+    return " ".join(text.split())
+
+
+def _text_ratio_dup(a: str, b: str) -> bool:
+    import difflib
+    norm_a = _normalize_text(a)
+    norm_b = _normalize_text(b)
+    if not norm_a and not norm_b:
+        return True
+    if not norm_a or not norm_b:
+        return False
+    return difflib.SequenceMatcher(None, norm_a, norm_b).ratio() > 0.85
+
+
 class ConsolidationLLMTier:
     """LLM tier (Increment 3): proposes typed ops over *unhinted* events.
 
@@ -534,7 +555,7 @@ class ConsolidationLLMTier:
         *,
         event_bus: Any = None,
         embedding_provider: Any = None,
-        batch_threshold: int = 8,
+        batch_threshold: int = 16,
         digest_limit: int = 40,
         per_event_chars: int = 600,
     ):
@@ -578,6 +599,38 @@ class ConsolidationLLMTier:
         usage, model}``. Never raises into the scheduler tick.
         """
         unhinted = [e for e in events if self._is_candidate(e)]
+        pre_filtered_count = 0
+        if getattr(self._embeddings, "available", False):
+            try:
+                live_facts = await self._graph.current_facts()
+                live_vectors = [f.vector for f in live_facts if f.vector is not None]
+                if live_vectors:
+                    from centri.curation import cosine_similarity
+                    filtered = []
+                    for ev in unhinted:
+                        text = _event_text(ev.get("payload") or {})
+                        ev_vec = None
+                        try:
+                            ev_vec = self._embeddings.embed(text)
+                        except Exception as exc:
+                            logger.debug("Pre-filter embed failed: %s", exc)
+                        if ev_vec is not None:
+                            is_dup = False
+                            for f_vec in live_vectors:
+                                if cosine_similarity(ev_vec, f_vec) > 0.85:
+                                    is_dup = True
+                                    break
+                            if is_dup:
+                                pre_filtered_count += 1
+                                continue
+                        filtered.append(ev)
+                    unhinted = filtered
+            except Exception as exc:
+                logger.debug("Embedding pre-filter failed: %s", exc)
+
+        if pre_filtered_count > 0:
+            logger.info("Pre-filtered %d events from consolidation batch using embedding similarity.", pre_filtered_count)
+
         result: Dict[str, Any] = {
             "available": self.available,
             "ran": False,
@@ -656,9 +709,9 @@ class ConsolidationLLMTier:
         return LiveDigest(
             decisions=[
                 {"id": d.id, "topic": d.topic, "statement": d.statement, "stance": d.stance}
-                for d in decisions[:n]
+                for d in decisions[:100]
             ],
-            facts=[{"id": f.id, "topic": f.topic, "statement": f.statement} for f in facts[:n]],
+            facts=[{"id": f.id, "topic": f.topic, "statement": f.statement} for f in facts[:200]],
             open_loops=[{"id": loop.id, "intent": loop.intent} for loop in loops[:n]],
         )
 
@@ -690,6 +743,8 @@ class ConsolidationLLMTier:
                 return await self._apply_close_loop(op, source_ids, model)
             if kind == OP_SUPERSEDE:
                 return await self._apply_supersede(op, source_ids, model)
+            if kind == OP_PROFILE_UPDATE:
+                return await self._apply_profile_update(op, source_ids, model)
         except Exception as exc:  # noqa: BLE001 — a single bad op must not abort the batch
             logger.debug("Op application failed", exc_info=True)
             return await self._reject(op, source_ids, model, f"apply error: {exc}")
@@ -702,6 +757,15 @@ class ConsolidationLLMTier:
             return f"relative-time statement (use ISO dates): '{m.group(0)}'"
         return None
 
+    async def _apply_profile_update(
+        self, op: Dict[str, Any], source_ids: List[str], model: str
+    ) -> Tuple[bool, Optional[str]]:
+        key = str(op["key"]).strip()
+        value = str(op["value"]).strip()
+        source_event_id = source_ids[0] if source_ids else ""
+        await self._graph.set_profile(key, value, source_event_id=source_event_id)
+        return await self._accept(op, source_ids, model, {"kind": "profile_update", "id": key, "value": value})
+
     async def _apply_add_fact(
         self, op: Dict[str, Any], source_ids: List[str], model: str
     ) -> Tuple[bool, Optional[str]]:
@@ -710,10 +774,25 @@ class ConsolidationLLMTier:
         bad = self._date_ok(statement)
         if bad:
             return await self._reject(op, source_ids, model, bad)
-        # Dedupe: a live fact on the same topic whose statement is ~equal already exists.
-        for f in await self._graph.current_facts():
-            if f.topic.strip().lower() == topic.lower() and _similar(f.statement, statement):
-                return await self._reject(op, source_ids, model, f"duplicate of fact {f.id}")
+        # Check semantic duplicate
+        same_topic_facts = [
+            f for f in await self._graph.current_facts()
+            if f.topic.strip().lower() == topic.lower()
+        ]
+        op_vector = self._embed(topic, statement)
+        if op_vector is not None:
+            from centri.curation import cosine_similarity
+            for f in same_topic_facts:
+                if f.vector is not None:
+                    if cosine_similarity(op_vector, f.vector) > 0.92:
+                        return await self._reject(op, source_ids, model, f"semantic duplicate of fact {f.id}")
+                elif _text_ratio_dup(f.statement, statement):
+                    return await self._reject(op, source_ids, model, f"semantic duplicate of fact {f.id}")
+        else:
+            # Fallback when embeddings are not available/failed
+            for f in same_topic_facts:
+                if _text_ratio_dup(f.statement, statement):
+                    return await self._reject(op, source_ids, model, f"semantic duplicate of fact {f.id}")
         eid = source_ids[0] if source_ids else None
         fact = Fact(
             id=f"llm-fact-{abs(hash((topic, statement))) % 10_000_000}",

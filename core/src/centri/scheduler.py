@@ -65,7 +65,7 @@ class Scheduler:
         # Deterministic consolidation can embed one vector per hinted event. Keep
         # each scheduler tick bounded so a large import backlog cannot monopolize
         # the async server loop.
-        self._consolidation_batch = 8
+        self._consolidation_batch = 16
         # High-water mark: only consolidate events after this (ts, id) cursor.
         self._last_consolidated_ts: str = ""
         self._last_consolidated_id: str = ""
@@ -218,7 +218,7 @@ class Scheduler:
             self._llm_idle_ticks = 0
             return {"ran": False}
 
-        threshold = getattr(tier, "_batch_threshold", 8)
+        threshold = getattr(tier, "_batch_threshold", 16)
         self._llm_idle_ticks += 1
         stale = self._llm_idle_ticks >= self._llm_staleness_ticks
         if len(self._llm_backlog) < threshold and not stale:

@@ -64,6 +64,11 @@ class RecallRequest(BaseModel):
     format: str = "markdown+items"
 
 
+class SearchRequest(BaseModel):
+    query: str
+    limit: int = 10
+
+
 class EventImportRequest(BaseModel):
     # Batch of event-contract envelopes from the fork (bridge-api §2). Idempotent
     # on (source, payload.event_uid); redaction runs before persistence.
@@ -368,6 +373,22 @@ def _recall_response(brief: Any, elapsed_ms: int) -> Dict[str, Any]:
         "graph_hwm": brief.graph_high_water,
         "elapsed_ms": elapsed_ms,
     }
+
+
+@app.post("/memory/search")
+async def memory_search(req: SearchRequest) -> list[dict[str, Any]]:
+    """Full-text search over event text payloads (FTS5)."""
+    if runtime.db is None:
+        return []
+    clean_words = []
+    for word in req.query.split():
+        w = word.replace('"', '').replace('*', '').replace(':', '').replace('-', '').replace('+', '').replace('^', '').strip()
+        if w:
+            clean_words.append(f'"{w}"')
+    fts_query = " ".join(clean_words)
+    if not fts_query:
+        return []
+    return await runtime.db.search_events(fts_query, limit=req.limit)
 
 
 @app.post("/memory/recall")

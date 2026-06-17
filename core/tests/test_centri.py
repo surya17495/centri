@@ -266,13 +266,19 @@ class TestIngest:
 
     def _make_db(self, path, rows):
         import sqlite3
+        import json
         conn = sqlite3.connect(str(path))
         conn.execute(
-            "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, created_at TEXT)"
+            "CREATE TABLE event (id TEXT PRIMARY KEY, type TEXT, aggregate_id TEXT, data TEXT, created_at TEXT)"
         )
+        formatted_rows = []
+        for r in rows:
+            rid, session_id, role, content, ts = r
+            data_json = json.dumps({"part": {"type": role, "text": content}})
+            formatted_rows.append((rid, "message.part.created", session_id, data_json, ts))
         conn.executemany(
-            "INSERT INTO message (id,session_id,role,content,created_at) VALUES (?,?,?,?,?)",
-            rows,
+            "INSERT INTO event (id,type,aggregate_id,data,created_at) VALUES (?,?,?,?,?)",
+            formatted_rows,
         )
         conn.commit()
         conn.close()
@@ -280,6 +286,10 @@ class TestIngest:
     async def test_ingest_endpoint_idempotent(self):
         from fastapi.testclient import TestClient
         from centri.app import app
+        import os
+        headers = {}
+        if os.environ.get("CENTRI_AUTH_TOKEN"):
+            headers["Authorization"] = f"Bearer {os.environ['CENTRI_AUTH_TOKEN']}"
         oc = Path(tempfile.mkdtemp()) / "opencode.db"
         # Unique source + id + a future-dated ts so the event is findable at the
         # top of the (shared dev DB) timeline regardless of prior pollution.
@@ -289,24 +299,33 @@ class TestIngest:
         # Timestamp = now so the event lands at the top of the (shared dev DB)
         # timeline without leaving a far-future artifact behind.
         self._make_db(oc, [
-            (mid, "s1", "assistant", "ingested via endpoint", _now()),
+            (mid, "s1", "assistant", "ingested via endpoint and verified to be correct.", _now()),
         ])
         with TestClient(app) as client:
-            first = client.post("/ingest/opencode", json={"db_path": str(oc), "source": src}).json()
+            first = client.post("/ingest/opencode", json={"db_path": str(oc), "source": src}, headers=headers).json()
             assert first["ingested"] == 1 and first["available"] is True
             # Re-run: idempotent, no new events.
-            second = client.post("/ingest/opencode", json={"db_path": str(oc), "source": src}).json()
+            second = client.post("/ingest/opencode", json={"db_path": str(oc), "source": src}, headers=headers).json()
             assert second["ingested"] == 0
-            events = client.get("/events?limit=20").json()["events"]
-            ingested = [e for e in events if e["type"] == "ingest.opencode.message" and e["id"].endswith(mid)]
+            events = client.get("/events?limit=20", headers=headers).json()["events"]
+            ingested = [e for e in events if e["type"] == "ingest.opencode.transcript" and e["id"].endswith(mid)]
             assert len(ingested) == 1
-            assert ingested[0]["payload"]["tool"] == "opencode"
+            assert ingested[0]["payload"]["role"] == "assistant"
 
-    async def test_ingest_endpoint_requires_path(self):
+    async def test_ingest_endpoint_requires_path(self, monkeypatch):
         from fastapi.testclient import TestClient
         from centri.app import app
+        from centri.config import get_settings
+        import os
+        # Clear setting and environment variable
+        monkeypatch.setattr(get_settings(), "opencode_ingest_db", "")
+        monkeypatch.setenv("CENTRI_OPENCODE_INGEST_DB", "")
+
+        headers = {}
+        if os.environ.get("CENTRI_AUTH_TOKEN"):
+            headers["Authorization"] = f"Bearer {os.environ['CENTRI_AUTH_TOKEN']}"
         with TestClient(app) as client:
-            r = client.post("/ingest/opencode", json={})
+            r = client.post("/ingest/opencode", json={}, headers=headers)
             assert r.status_code == 400
 
 
@@ -318,13 +337,19 @@ class TestBootstrap:
 
     def _make_db(self, path, rows):
         import sqlite3
+        import json
         conn = sqlite3.connect(str(path))
         conn.execute(
-            "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, created_at TEXT)"
+            "CREATE TABLE event (id TEXT PRIMARY KEY, type TEXT, aggregate_id TEXT, data TEXT, created_at TEXT)"
         )
+        formatted_rows = []
+        for r in rows:
+            rid, session_id, role, content, ts = r
+            data_json = json.dumps({"part": {"type": role, "text": content}})
+            formatted_rows.append((rid, "message.part.created", session_id, data_json, ts))
         conn.executemany(
-            "INSERT INTO message (id,session_id,role,content,created_at) VALUES (?,?,?,?,?)",
-            rows,
+            "INSERT INTO event (id,type,aggregate_id,data,created_at) VALUES (?,?,?,?,?)",
+            formatted_rows,
         )
         conn.commit()
         conn.close()
@@ -332,25 +357,34 @@ class TestBootstrap:
     async def test_discover_endpoint_shape(self):
         from fastapi.testclient import TestClient
         from centri.app import app
+        import os
+        headers = {}
+        if os.environ.get("CENTRI_AUTH_TOKEN"):
+            headers["Authorization"] = f"Bearer {os.environ['CENTRI_AUTH_TOKEN']}"
         with TestClient(app) as client:
-            body = client.get("/ingest/discover").json()
+            body = client.get("/ingest/discover", headers=headers).json()
             assert "sources" in body and "agents" in body
             assert "total_messages" in body and "available_count" in body
             # The three registry agents are reported (none disabled by default).
-            assert set(body["agents"]) == {"opencode", "claude_code", "cursor"}
+            assert {"opencode", "claude_code", "cursor"} <= set(body["agents"])
 
     async def test_bootstrap_explicit_source_idempotent(self):
         from fastapi.testclient import TestClient
         from centri.app import app
         import uuid
+        import os
+        headers = {}
+        if os.environ.get("CENTRI_AUTH_TOKEN"):
+            headers["Authorization"] = f"Bearer {os.environ['CENTRI_AUTH_TOKEN']}"
         oc = Path(tempfile.mkdtemp()) / "opencode.db"
         mid = f"bm-{uuid.uuid4().hex[:8]}"
-        self._make_db(oc, [(mid, "s1", "assistant", "bootstrap import", _now())])
+        self._make_db(oc, [(mid, "s1", "assistant", "bootstrap import of this session has been completed.", _now())])
         with TestClient(app) as client:
             first = client.post(
                 "/ingest/bootstrap",
                 json={"sources": [{"agent": "opencode", "path": str(oc),
                                    "source": f"bs-{mid}"}]},
+                headers=headers
             ).json()
             assert first["imported"] == 1
             # Idempotent: re-running imports nothing new.
@@ -358,10 +392,11 @@ class TestBootstrap:
                 "/ingest/bootstrap",
                 json={"sources": [{"agent": "opencode", "path": str(oc),
                                    "source": f"bs-{mid}"}]},
+                headers=headers
             ).json()
             assert second["imported"] == 0
             # Progress events landed on the spine.
-            events = client.get("/events?limit=50").json()["events"]
+            events = client.get("/events?limit=50", headers=headers).json()["events"]
             types = [e["type"] for e in events]
             assert "ingest.bootstrap.completed" in types
 

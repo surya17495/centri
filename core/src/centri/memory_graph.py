@@ -193,6 +193,14 @@ class MemoryGraph:
                 tags TEXT NOT NULL DEFAULT ''
             )"""
         )
+        await self._db._execute(
+            """CREATE TABLE IF NOT EXISTS mem_profile (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TEXT,
+                source_event_id TEXT
+            )"""
+        )
         # Additive migration for graph tables created before Phase A (Decision 9):
         # ALTER in tenant_id if an older table is missing it. Mirrors Database._migrate
         # so the column is present no matter which path created the table first.
@@ -350,8 +358,8 @@ class MemoryGraph:
         await self.ensure_tables()
         states = states or [LOOP_OPEN, LOOP_DORMANT]
         placeholders = ",".join("?" for _ in states)
-        sql = f"SELECT * FROM mem_open_loops WHERE state IN ({placeholders})"
-        params: List[Any] = list(states)
+        sql = f"SELECT * FROM mem_open_loops WHERE LOWER(state) IN ({placeholders})"
+        params: List[Any] = [s.lower() for s in states]
         if repo_id:
             sql += " AND (repo_id = ? OR repo_id IS NULL)"
             params.append(repo_id)
@@ -373,7 +381,7 @@ class MemoryGraph:
         when = when or _now()
         await self._db._execute(
             "UPDATE mem_open_loops SET last_touched_at = ?, updated_at = ?, state = "
-            "CASE WHEN state = 'dormant' THEN 'open' ELSE state END WHERE id = ?",
+            "CASE WHEN LOWER(state) = 'dormant' THEN 'open' ELSE state END WHERE id = ?",
             (when, when, loop_id),
         )
 
@@ -512,4 +520,21 @@ class MemoryGraph:
             created_at=r["created_at"], updated_at=r["updated_at"],
             last_touched_at=r["last_touched_at"], dormancy_asked_at=r["dormancy_asked_at"],
             tags=self._split_tags(r["tags"]),
+        )
+
+    async def get_profile(self) -> Dict[str, str]:
+        await self.ensure_tables()
+        cur = await self._db._execute("SELECT key, value FROM mem_profile")
+        return {row["key"]: row["value"] for row in cur.fetchall()}
+
+    async def set_profile(self, key: str, value: str, source_event_id: str = "") -> None:
+        await self.ensure_tables()
+        await self._db._execute(
+            """INSERT INTO mem_profile (key, value, updated_at, source_event_id)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(key) DO UPDATE SET
+                 value=excluded.value,
+                 updated_at=excluded.updated_at,
+                 source_event_id=excluded.source_event_id""",
+            (key, value, _now(), source_event_id),
         )

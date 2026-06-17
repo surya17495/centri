@@ -1,0 +1,7 @@
+name: centri
+version: 0.1.0
+description: "Centri — memory provider backed by Centri's cognitive event-spine API."
+requires_env: []
+hooks:
+  - on_memory_write
+  - on_session_switch

@@ -118,6 +118,48 @@ CENTRI is BYOK (bring your own keys) and model-agnostic:
   and `CENTRI_INGEST_CURSOR_PATHS` override the per-platform probe for histories in
   unusual locations; `CENTRI_INGEST_DISABLED_AGENTS` opts an agent out entirely.
 
+## Hermes integration
+
+Centri also ships as a **Hermes `memory.provider`**. A thin plugin
+(`CentriMemoryProvider`) translates Hermes memory calls into the core's HTTP
+API: `prefetch` → `POST /memory/recall`, `sync_turn` / `on_memory_write` →
+batched `POST /events/import`. The deployable plugin lives at
+[`deploy/hermes-plugin/centri/`](deploy/hermes-plugin/centri/).
+
+```yaml
+# ~/.hermes/config.yaml
+memory:
+  provider: centri
+  centri:
+    api_base: http://127.0.0.1:8760
+    auth_token: <CENTRI_AUTH_TOKEN>   # same value as the core + the fork's CENTRI_TOKEN
+```
+
+Structured Hermes chat is ingested as typed, dedupable envelopes
+(`hermes.user.message`, `hermes.assistant.message`, `hermes.tool.result`,
+`hermes.memory.write`) — not flattened text. Restart Hermes after any plugin
+change. Full guide: [`docs/HERMES-INTEGRATION.md`](docs/HERMES-INTEGRATION.md).
+
+### Running it as systemd services
+
+The reference VM runs two services sharing one memory DB
+(`~/.centri/state.db`):
+
+| Service | Port | What |
+|---------|------|------|
+| `centri-core.service` | 8760 | The Centri core (`centri serve`). |
+| `opencode.service` | 4096 | The OpenCode fork web UI (`opencode web … --port 4096`), pointed at the core via `CENTRI_URL` / `CENTRI_TOKEN`. |
+
+```bash
+sudo systemctl enable --now centri-core opencode
+systemctl is-active centri-core opencode
+curl -fsS http://127.0.0.1:8760/health    # -> {"status":"ok",...}
+```
+
+The `xdg-open` ENOENT line in `opencode.service` logs is harmless — OpenCode
+tries to auto-open a browser on a headless box and keeps running after the
+_spawn_ fails. See [troubleshooting](docs/HERMES-INTEGRATION.md#10-troubleshooting).
+
 ## Memory import
 
 A fresh install imports your existing coding-agent histories so memory is complete from

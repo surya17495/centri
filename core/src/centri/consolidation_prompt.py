@@ -37,6 +37,7 @@ OP_ADD_DECISION = "add_decision"
 OP_OPEN_LOOP = "open_loop"
 OP_CLOSE_LOOP = "close_loop"
 OP_SUPERSEDE = "supersede"
+OP_PROFILE_UPDATE = "profile_update"
 OP_FINISH = "finish"
 
 # kind -> (required keys, optional keys)
@@ -48,6 +49,7 @@ OP_SCHEMA: Dict[str, Tuple[Tuple[str, ...], Tuple[str, ...]]] = {
     # required; the gatekeeper enforces the either/or.
     OP_CLOSE_LOOP: ((), ("loop_id", "intent_match", "resolution")),
     OP_SUPERSEDE: (("node_id", "kind", "new_statement"), ("topic",)),
+    OP_PROFILE_UPDATE: (("key", "value"), ()),
     OP_FINISH: ((), ()),
 }
 
@@ -152,6 +154,9 @@ SYSTEM_PROMPT = (
     "relative time word will be REJECTED.\n"
     "- Dedupe against the CURRENT MEMORY shown below: if a fact already exists, do "
     "not re-add it; supersede it only if the new information actually changes it.\n"
+    "- Propose profile updates (op: 'profile_update') when you see user preferences, "
+    "work habits, project context, or configurations (e.g. key: 'active_projects', "
+    "value: 'futures-agent, dashboard-next').\n"
     "- Every statement must stand on its own without the raw log — self-contained, "
     "specific, and verifiable.\n\n"
     "Allowed operations (emit a JSON array of these objects, nothing else):\n"
@@ -160,6 +165,7 @@ SYSTEM_PROMPT = (
     '  {"op":"open_loop","intent":str,"cue"?:str}\n'
     '  {"op":"close_loop","loop_id"?:str,"intent_match"?:str,"resolution"?:"done"|"parked"}\n'
     '  {"op":"supersede","node_id":str,"kind":"fact"|"decision","new_statement":str}\n'
+    '  {"op":"profile_update","key":str,"value":str}\n'
     '  {"op":"finish"}\n\n'
     "Emit your ops as one JSON array, then a final {\"op\":\"finish\"}. If nothing "
     "is worth remembering, return [{\"op\":\"finish\"}]."

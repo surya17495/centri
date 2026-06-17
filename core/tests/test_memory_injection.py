@@ -114,7 +114,7 @@ class TestSchedulerConsolidation:
 class TestProactiveBrief:
     async def test_reports_changed_blocked_next(self, env):
         db, graph = env
-        await db.append_event("e1", "memory.synthesized", "memory", _now(), payload={"summary": "fact:data source"})
+        await db.append_event("e1", "user.utterance", "memory", _now(), payload={"text": "fact:data source"})
         await db.append_event("e2", "task.failed", "jobs", _now(), payload={"error": "backtest crashed on NaN"})
         await graph.add_open_loop(OpenLoop(id="l1", intent="add walk-forward validation", source_event_id="e3"))
         brief = await ProactiveBriefBuilder(db, graph).build()

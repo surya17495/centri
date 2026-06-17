@@ -294,3 +294,116 @@ class TestBatchThresholdAndDeterminism:
         assert msgs[0]["role"] == "system"
         assert "f1" in msgs[1]["content"] and "stdout line" in msgs[1]["content"]
         assert "ABSOLUTE DATES ONLY" in msgs[0]["content"]
+
+
+class MockEmbeddingProvider:
+    def __init__(self, vectors=None):
+        self.vectors = vectors or {}
+        self.available = True
+        self.stamp = "embedding:mock"
+
+    def embed(self, text):
+        return self.vectors.get(text, None)
+
+
+class TestTargetedImprovements:
+    async def test_pre_filter_with_embeddings(self, setup):
+        db, graph = setup
+        from centri.memory_graph import Fact
+
+        provider = MockEmbeddingProvider({
+            "User auth uses JWT tokens": [1.0, 0.0],
+            "auth: User auth uses JWT tokens": [1.0, 0.0],
+        })
+
+        fact = Fact(
+            id="f1",
+            topic="auth",
+            statement="User auth uses JWT tokens",
+            source_event_id=None,
+            vector=[1.0, 0.0]
+        )
+        await graph.supersede_fact(fact)
+
+        llm = FakeLLM([])
+        tier = ConsolidationLLMTier(db, graph, client=llm, batch_threshold=1, embedding_provider=provider)
+
+        ev = {"id": "ev-1", "type": "hand.stdout", "payload": {"text": "User auth uses JWT tokens"}}
+        res = await tier.consume_unhinted([ev])
+
+        assert res["ran"] is False
+        assert res["batch_size"] == 0
+        assert len(llm.calls) == 0
+
+    async def test_semantic_dedup_in_gatekeeper(self, setup):
+        db, graph = setup
+        from centri.memory_graph import Fact
+
+        provider = MockEmbeddingProvider({
+            "auth: User auth uses JWT tokens": [1.0, 0.0],
+            "auth: User authorization uses JWT tokens": [0.95, 0.3122],
+        })
+
+        fact = Fact(
+            id="f1",
+            topic="auth",
+            statement="User auth uses JWT tokens",
+            source_event_id=None,
+            vector=[1.0, 0.0]
+        )
+        await graph.supersede_fact(fact)
+
+        llm = FakeLLM([_ops_json(
+            {"op": "add_fact", "topic": "auth", "statement": "User authorization uses JWT tokens"}
+        )])
+        tier = ConsolidationLLMTier(db, graph, client=llm, batch_threshold=1, embedding_provider=provider)
+
+        res = await tier.consume_unhinted([{"id": "ev-1", "type": "x", "payload": {"text": "dummy"}}])
+
+        assert res["applied"] == 0
+        assert res["rejected"] == 1
+        assert "semantic duplicate of fact f1" in res["reasons"]
+
+    async def test_semantic_dedup_text_fallback(self, setup):
+        db, graph = setup
+        from centri.curation import NullEmbeddingProvider
+        from centri.memory_graph import Fact
+
+        provider = NullEmbeddingProvider()
+
+        fact = Fact(
+            id="f1",
+            topic="auth",
+            statement="User authentication uses jwt tokens.",
+            source_event_id=None
+        )
+        await graph.supersede_fact(fact)
+
+        llm = FakeLLM([_ops_json(
+            {"op": "add_fact", "topic": "auth", "statement": "user authentication   uses JWT tokens!!!"}
+        )])
+        tier = ConsolidationLLMTier(db, graph, client=llm, batch_threshold=1, embedding_provider=provider)
+
+        res = await tier.consume_unhinted([{"id": "ev-1", "type": "x", "payload": {"text": "dummy"}}])
+
+        assert res["applied"] == 0
+        assert res["rejected"] == 1
+        assert "semantic duplicate of fact f1" in res["reasons"]
+
+    async def test_digest_budget_expansion(self, setup):
+        db, graph = setup
+        from centri.memory_graph import Fact, Decision, STANCE_ADOPTED
+
+        for i in range(150):
+            fact = Fact(id=f"f-{i}", topic="t", statement=f"statement {i}", source_event_id=None)
+            await graph.add_fact(fact)
+        for i in range(120):
+            dec = Decision(id=f"d-{i}", topic="t", statement=f"statement {i}", stance=STANCE_ADOPTED, source_event_id=None)
+            await graph.add_decision(dec)
+
+        tier = ConsolidationLLMTier(db, graph, client=FakeLLM([]))
+        digest = await tier._build_digest([])
+
+        assert len(digest.facts) == 150
+        assert len(digest.decisions) == 100
+

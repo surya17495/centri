@@ -2,9 +2,12 @@
 
 import asyncio
 import json
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from centri.config import get_settings
 from centri.redaction import redact_jsonable
@@ -30,6 +33,8 @@ CREATE TABLE IF NOT EXISTS events (
     importance TEXT DEFAULT 'low',
     payload_json TEXT NOT NULL DEFAULT '{}'
 );
+
+CREATE VIRTUAL TABLE IF NOT EXISTS event_fts USING fts5(text, type, source, content_rowid='rowid');
 
 CREATE TABLE IF NOT EXISTS threads (
     id TEXT PRIMARY KEY,
@@ -181,6 +186,32 @@ class Database:
                     f"ALTER TABLE {table} ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'local'"
                 )
 
+        # Backfill event_fts if it is empty but events is not
+        try:
+            has_fts = conn.execute("SELECT 1 FROM event_fts LIMIT 1").fetchone()
+            has_events = conn.execute("SELECT 1 FROM events LIMIT 1").fetchone()
+            if has_events and not has_fts:
+                cursor = conn.execute("SELECT rowid, type, source, payload_json FROM events")
+                for rowid, type_, source, payload_json in cursor.fetchall():
+                    try:
+                        payload = json.loads(payload_json)
+                    except Exception:
+                        payload = {}
+                    text_to_index = None
+                    if isinstance(payload, dict):
+                        if "text" in payload:
+                            text_to_index = payload["text"]
+                        elif "content" in payload:
+                            text_to_index = payload["content"]
+                    if text_to_index is not None:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO event_fts (rowid, text, type, source) VALUES (?, ?, ?, ?)",
+                            (rowid, str(text_to_index), type_, source),
+                        )
+        except sqlite3.OperationalError:
+            # In case FTS5 is not available or event_fts fails, ignore to prevent breaking the boot
+            pass
+
     async def _get_conn(self) -> sqlite3.Connection:
         if self._conn is None:
             self._conn = sqlite3.connect(str(self._path))
@@ -210,10 +241,31 @@ class Database:
     ) -> None:
         # Redact secrets before the payload ever touches the append-only ledger.
         payload_json = json.dumps(redact_jsonable(payload or {}))
-        await self._execute(
-            "INSERT INTO events (id, type, source, ts, thread_id, task_id, repo_id, tenant_id, importance, payload_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (event_id, type, source, ts, thread_id, task_id, repo_id, tenant_id, importance, payload_json),
-        )
+        
+        text_to_index = None
+        if isinstance(payload, dict):
+            if "text" in payload:
+                text_to_index = payload["text"]
+            elif "content" in payload:
+                text_to_index = payload["content"]
+
+        async with self._lock:
+            conn = await self._get_conn()
+            cur = conn.execute(
+                "INSERT INTO events (id, type, source, ts, thread_id, task_id, repo_id, tenant_id, importance, payload_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (event_id, type, source, ts, thread_id, task_id, repo_id, tenant_id, importance, payload_json),
+            )
+            if text_to_index is not None:
+                rowid = cur.lastrowid
+                try:
+                    conn.execute(
+                        "INSERT INTO event_fts (rowid, text, type, source) VALUES (?, ?, ?, ?)",
+                        (rowid, str(text_to_index), type, source),
+                    )
+                except sqlite3.OperationalError:
+                    # Fail open if event_fts table doesn't exist or FTS5 fails
+                    pass
+            conn.commit()
 
     async def recent_events(
         self,
@@ -257,6 +309,23 @@ class Database:
                 (tenant_id, limit),
             )
         return [dict(row) for row in cur.fetchall()]
+
+    async def search_events(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        try:
+            cur = await self._execute(
+                """
+                SELECT events.id AS event_id, event_fts.text, event_fts.type, event_fts.source
+                FROM event_fts
+                JOIN events ON events.rowid = event_fts.rowid
+                WHERE event_fts MATCH ?
+                LIMIT ?
+                """,
+                (query, limit),
+            )
+            return [dict(row) for row in cur.fetchall()]
+        except sqlite3.OperationalError as e:
+            logger.warning("FTS search failed: %s", e)
+            return []
 
     # threads
     async def create_thread(
