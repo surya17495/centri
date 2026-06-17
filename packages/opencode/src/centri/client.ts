@@ -7,7 +7,7 @@
 //   CENTRI_URL    base URL of the core, e.g. http://127.0.0.1:8000
 //   CENTRI_TOKEN  bearer token (maps to core's CENTRI_AUTH_TOKEN)
 
-const RECALL_TIMEOUT_MS = 800
+const RECALL_TIMEOUT_MS = Number(process.env["CENTRI_RECALL_TIMEOUT_MS"] ?? 3000)
 const IMPORT_TIMEOUT_MS = 5000
 const FLUSH_INTERVAL_MS = 2000
 const FLUSH_MAX_EVENTS = 50

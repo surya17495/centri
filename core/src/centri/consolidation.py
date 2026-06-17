@@ -697,14 +697,12 @@ class ConsolidationLLMTier:
         return not event_has_hints(ev.get("payload") or {})
 
     async def _build_digest(self, batch: List[Dict[str, Any]]) -> LiveDigest:
-        repo_id = None
-        for e in batch:
-            repo_id = e.get("repo_id") or (e.get("payload") or {}).get("repo_id")
-            if repo_id:
-                break
-        decisions = await self._graph.current_decisions(repo_id=repo_id)
-        facts = await self._graph.current_facts(repo_id=repo_id)
-        loops = await self._graph.open_loops(repo_id=repo_id)
+        # Cross-repo: the digest must show ALL live decisions/facts/open_loops
+        # (not scoped by repo_id) so the model can detect cross-project
+        # obsolescence — e.g. "adopt HAL" superseded by "build Centri".
+        decisions = await self._graph.current_decisions()
+        facts = await self._graph.current_facts()
+        loops = await self._graph.open_loops()
         n = self._digest_limit
         return LiveDigest(
             decisions=[

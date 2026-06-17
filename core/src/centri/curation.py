@@ -749,10 +749,13 @@ class Ranker:
         overlap = round(overlap_n / (overlap_n + 1.0), 6) if overlap_n else 0.0
         type_prior = _TYPE_PRIOR.get(c.item_type, 0.25)
         open_loop_boost = 1.0 if (c.item_type == "open_loop" and c.touches_cue) else 0.0
-        # Thread affinity: thread-local items get the boost; cross-thread
-        # decisions still surface (they just don't get this particular bump).
+        # Thread affinity: same-thread items get the full boost; cross-thread
+        # same-repo items get partial credit (prior session on the same project
+        # is still relevant context); different repo gets nothing.
         if c.thread_id and cue.thread_id and c.thread_id == cue.thread_id:
             thread_affinity = 1.0
+        elif c.repo_id and cue.repo_id and c.repo_id == cue.repo_id:
+            thread_affinity = 0.5
         else:
             thread_affinity = 0.0
         recency = _recency_score(c.created_at)
@@ -1274,11 +1277,6 @@ async def curate(
             for v in verbatim
             if not _is_legacy_source(v.source) and not _text_mentions_legacy(v.text)
         ]
-
-    # Exclude verbatim matches from the current thread — they are already in
-    # context (circular recall).
-    if thread_id:
-        verbatim = [v for v in verbatim if v.thread_id != thread_id]
 
     # Dedup by first 200 chars — same text appears in multiple event types
     # (hermes.user.message, user.utterance, hermes.tool.result). Keep first.

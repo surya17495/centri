@@ -152,6 +152,7 @@ class Settings:
     consolidation_api_key: str = ""
     consolidation_model: str = ""
     consolidation_batch_size: int = 16
+    consolidation_max_tokens: int = 8192
 
     # Session-start push briefing (Increment 2). On session start CENTRI builds
     # the deterministic, LLM-free ProactiveBrief and surfaces it unprompted — as a
@@ -248,6 +249,7 @@ class Settings:
             consolidation_api_key=os.getenv("CENTRI_CONSOLIDATION_API_KEY", ""),
             consolidation_model=os.getenv("CENTRI_CONSOLIDATION_MODEL", ""),
             consolidation_batch_size=int(os.getenv("CENTRI_CONSOLIDATION_BATCH_SIZE", "16")),
+            consolidation_max_tokens=int(os.getenv("CENTRI_CONSOLIDATION_MAX_TOKENS", "8192")),
             session_brief=os.getenv("CENTRI_SESSION_BRIEF", "true").lower() not in ("0", "false", "no", "off"),
             autonomy_level=os.getenv("CENTRI_AUTONOMY_LEVEL", "autonomous_local"),
             auto_commit=os.getenv("CENTRI_AUTO_COMMIT", "true").lower() == "true",

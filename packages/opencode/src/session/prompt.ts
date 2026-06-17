@@ -1337,7 +1337,7 @@ export const layer = Layer.effect(
             // array. Fail-open — any failure (disabled/slow/dead core) leaves the
             // turn untouched.
             if (step === 1) {
-              const cue = centriCue(lastUserMsg)
+              const cue = centriCue(msgs)
               if (cue) {
                 const brief = yield* Effect.promise(() => Centri.recall(cue, { threadID: sessionID }))
                 if (brief?.markdown.trim()) system.push(brief.markdown)
@@ -1690,20 +1690,48 @@ export function createStructuredOutputTool(input: {
     },
   })
 }
-// CENTRI: build a recall cue from the last user message — visible text plus any
-// attached file paths. Returns undefined when there's nothing to recall on.
-function centriCue(message: SessionV1.WithParts | undefined): string | undefined {
-  if (!message) return undefined
-  const text = message.parts
+// CENTRI: build a recall cue from the conversation. Includes the last user
+// message (visible text + file paths) plus recent assistant/user turns for
+// anaphora resolution — so "where did we leave off?" or "is that still
+// broken?" can match against prior session context. Returns undefined when
+// there's nothing to recall on.
+const CENTRI_CUE_CONTEXT_TURNS = 6
+function centriCue(msgs: SessionV1.WithParts[]): string | undefined {
+  const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
+  if (!lastUserMsg) return undefined
+  const userText = lastUserMsg.parts
     .filter((p): p is SessionV1.TextPart => p.type === "text" && !p.synthetic && !p.ignored)
     .map((p) => p.text)
     .join("\n")
     .trim()
-  const files = message.parts
+  const files = lastUserMsg.parts
     .filter((p): p is SessionV1.FilePart => p.type === "file" && !!p.filename)
     .map((p) => p.filename!)
-  const cue = [text, files.length ? `Active files: ${files.join(", ")}` : ""].filter(Boolean).join("\n").trim()
-  return cue || undefined
+
+  // Collect recent prior turns for anaphora context (last N messages before
+  // the current user message, oldest-to-newest). Truncated per turn to keep
+  // the cue compact — the recall engine does lexical matching, not reasoning.
+  const lastUserIdx = msgs.lastIndexOf(lastUserMsg)
+  const ctxStart = Math.max(0, lastUserIdx - CENTRI_CUE_CONTEXT_TURNS)
+  const ctxTurns: string[] = []
+  for (let i = ctxStart; i < lastUserIdx; i++) {
+    const m = msgs[i]
+    const role = m.info.role
+    if (role !== "user" && role !== "assistant") continue
+    const text = m.parts
+      .filter((p): p is SessionV1.TextPart => p.type === "text" && !p.synthetic && !p.ignored)
+      .map((p) => p.text)
+      .join("\n")
+      .trim()
+    if (text) ctxTurns.push(`${role}: ${text.slice(0, 500)}`)
+  }
+
+  const parts = [
+    ctxTurns.length ? `Recent context:\n${ctxTurns.join("\n")}` : "",
+    userText,
+    files.length ? `Active files: ${files.join(", ")}` : "",
+  ].filter(Boolean)
+  return parts.join("\n\n").trim() || undefined
 }
 
 const bashRegex = /!`([^`]+)`/g

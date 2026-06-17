@@ -50,7 +50,7 @@ class OpenAIChatClient:
         *,
         timeout: float = 60.0,
         temperature: float = 0.0,
-        max_tokens: int = 2048,
+        max_tokens: int = 8192,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
@@ -118,4 +118,5 @@ def resolve_consolidation_client(settings: Any = None) -> Optional[OpenAIChatCli
     api_key = getattr(settings, "consolidation_api_key", "") or ""
     if not base_url or not model:
         return None
-    return OpenAIChatClient(base_url=base_url, api_key=api_key, model=model)
+    max_tokens = getattr(settings, "consolidation_max_tokens", 8192) or 8192
+    return OpenAIChatClient(base_url=base_url, api_key=api_key, model=model, max_tokens=max_tokens)
