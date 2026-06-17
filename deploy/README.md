@@ -1,7 +1,8 @@
 # CENTRI — VM deployment (Phase 3a)
 
-Run the CENTRI core on a small VM; connect thin clients (Tauri shell on
-Windows/Mac, any browser, mobile PWA) over TLS with a shared auth token.
+Run the CENTRI core on a small VM; connect thin clients (any browser, or the
+OpenCode fork web app) over TLS with a shared auth token. A Tauri desktop binary
+and mobile PWA are scaffolded/roadmap, not shipped built clients.
 
 ## Quick start
 

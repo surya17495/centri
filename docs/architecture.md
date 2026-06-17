@@ -9,8 +9,8 @@ keeps durable state on an append-only event spine, and derives memory from it.
 
 ```
                     ┌──────────────────────────────┐
-                    │   Shell  (Tauri 2 + React)    │   ← Phase 1
-                    │   text surface                │
+                    │   Web UI  (OpenCode fork /    │
+                    │   React shell) — text surface │
                     └───────────────┬──────────────┘
                                     │ HTTP + WebSocket
                     ┌───────────────▼──────────────┐
@@ -37,8 +37,10 @@ keeps durable state on an append-only event spine, and derives memory from it.
 
 ## Components
 
-- **Shell (Phase 1)** — Tauri 2 + React desktop surface. Talks to the core over
-  HTTP and the `/events/stream` WebSocket. Not in Phase 0.
+- **Shell** — the OpenCode fork web app (and an optional React shell in
+  `shell/`). Talks to the core over HTTP and the `/events/stream` WebSocket. The
+  Tauri desktop wrapper (`shell/src-tauri/`) is scaffolded but not a shipped
+  built binary; use the web app.
 - **Coordinator** (`coordinator.py`) — the brain. Classifies intent, checks
   permissions, assembles hot context, hands off to a capability, narrates, and
   records events. Hot path reads from the context cache (<50 ms); DB and memory
@@ -49,12 +51,14 @@ keeps durable state on an append-only event spine, and derives memory from it.
 - **Memory** (`memory.py`, `memory_store.py`) — a *derived* index over the spine.
   `MemoryStore` exposes core blocks (`active_project`, `open_loops`,
   `priorities`, `people`), archival facts, a synthesis hook, and
-  `rebuild_from_events()`. Letta is an optional semantic backend; SQLite is the
-  always-available fallback projection.
+  `rebuild_from_events()`. SQLite is the always-available native projection; a
+  `LettaMemoryStore` adapter exists for benchmark comparison only and is not a
+  runtime requirement.
 - **Hands** (`hands/`) — capability router over the `Hand` ABC. The coordinator
   hands off by capability name; the router picks a configured hand. `OpenCodeHand`
-  drives the `opencode` CLI as a subprocess; `AcpHand` is a stub for an Agent
-  Client Protocol peer (JSON-RPC over stdio), honest-unavailable until Phase 1.
+  drives the `opencode` CLI as a subprocess; `AcpHand` is a real Agent Client
+  Protocol client (JSON-RPC over stdio) that launches the agent, streams progress,
+  and routes destructive actions through the approval gate.
 - **Jobs / Scheduler** (`jobs.py`, `scheduler.py`) — run handoffs to completion,
   persist progress/artifact/completion events, recover in-flight work on boot.
 - **Model router** (`model_router.py`) — BYOK role-based model resolution through

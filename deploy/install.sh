@@ -12,8 +12,9 @@
 #   4. Installs + starts the systemd service (core bound to 127.0.0.1)
 #   5. If a domain is given: installs Caddy and configures auto-TLS reverse proxy
 #
-# After install, thin clients (Tauri shell / browser / mobile PWA) connect to
-# https://<domain> with the printed auth token (Settings → Backend → Auth token).
+# After install, thin clients (any browser, or the OpenCode fork web app) connect
+# to https://<domain> with the printed auth token (Settings → Backend → Auth
+# token). Tauri desktop and mobile PWA are roadmap, not shipped clients.
 
 set -euo pipefail
 
