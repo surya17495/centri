@@ -147,46 +147,7 @@ def _tool_call_fact(tool: str, input_: Dict[str, Any], state: Dict[str, Any], de
     stdout dump), so the consolidation worker can place it in the graph without
     LLM re-interpretation.
     """
-    if not description:
-        return None
-    status = (state or {}).get("status", "")
-    if status not in ("completed", "success", "done", ""):
-        # Running/pending/failed calls are transient; don't pollute the graph.
-        return None
-    # Normalize description
-    desc = description.strip()
-    if len(desc) < 3:
-        return None
-
-    # NOISE FILTER: mechanical write confirmations only kept if description is > 100 chars
-    desc_l = desc.lower()
-    if (desc_l.startswith("updated file") or 
-        desc_l.startswith("created file") or 
-        desc_l.startswith("modified")):
-        if len(desc) <= 100:
-            return None
-
-    tool_l = (tool or "").lower()
-    # NOISE FILTER: low-value tools only become facts when they actually surfaced
-    # durable content (description present AND non-trivial length). Mechanical reads
-    # with bare descriptions are omitted from the graph to keep it dense with signal.
-    if tool_l in _LOW_VALUE_TOOLS:
-        if len(desc) < 80:
-            return None
-        # also drop refs to trailing command-line args that look like paths
-        # with no other context
-        if desc.replace("/", "").replace(".", "").replace("_", "").strip() == "":
-            return None
-    # Include short command hint if available
-    cmd = input_.get("command", "") or input_.get("cmd", "") or ""
-    if cmd and len(cmd) < 80:
-        desc = f"{desc}  →  {cmd}"
-    return {
-        "op": "add_fact",
-        "topic": f"tool:{tool}",
-        "statement": desc,
-        "tags": ["opencode", "tool_call", tool],
-    }
+    return None
 
 
 def _session_activity_hints(session_row: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -322,28 +283,7 @@ def _message_fact(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     (assistant, system, tool) and only when the message carries durable signal
     (a decision stated explicitly, a file path mentioned, etc.).
     """
-    role = (row.get("role") or "unknown").lower()
-    if role not in ("assistant", "system", "tool"):
-        return None
-    content = (row.get("content") or "").strip()
-    if len(content) < 60:
-        return None
-    content_l = content.lower()
-    # Very light heuristic: only surface messages that mention a concrete
-    # artifact (file path) and look like they contain a decision or insight keyword.
-    if not any(x in content_l for x in ("/", ".py", ".ts", ".js", ".json", ".md")):
-        return None
-    if not any(x in content_l for x in (
-        "decided", "changed", "fixed", "bug", "todo", "because", 
-        "should", "need to", "problem", "issue", "convention", "rule", "pattern"
-    )):
-        return None
-    return {
-        "op": "add_fact",
-        "topic": f"transcript:{row.get('session_id', 'unknown')}",
-        "statement": content[:_FACT_STATEMENT_CHARS],
-        "tags": ["opencode", "transcript", role],
-    }
+    return None
 
 
 # ───────────────────── the adapter
@@ -637,10 +577,6 @@ class OpenCodeIngestor(MessageAdapter):
                     "input": input_,
                     "aggregate_id": aggregate_id,
                 }
-                # Only promote a fact hint for completed, meaningful tool calls.
-                fact = _tool_call_fact(tool, input_, state, effective_desc)
-                if fact:
-                    payload["fact"] = fact
                 summary = f"[{tool}] {effective_desc[:160]}" if effective_desc else f"[{tool}] tool call"
                 await self._emit_event(
                     event_id=event_id,
@@ -670,9 +606,6 @@ class OpenCodeIngestor(MessageAdapter):
                     "text": text,
                     "aggregate_id": aggregate_id,
                 }
-                fact = _message_fact({"role": norm_role, "content": text, "session_id": aggregate_id})
-                if fact:
-                    payload["fact"] = fact
                 await self._emit_event(
                     event_id=event_id,
                     event_type="ingest.opencode.transcript",
@@ -735,7 +668,7 @@ class OpenCodeIngestor(MessageAdapter):
             }
             hints = _session_activity_hints(session_row)
             if hints:
-                payload["fact"] = hints[0]  # primary hint
+                payload["open_loop"] = hints[0]  # primary hint
                 payload["decisions"] = hints[1:]
 
             await self._emit_event(
@@ -814,7 +747,7 @@ class OpenCodeIngestor(MessageAdapter):
         }
         hints = _session_activity_hints(data)
         if hints:
-            payload["fact"] = hints[0]
+            payload["open_loop"] = hints[0]
             payload["decisions"] = hints[1:]
         await self._emit_event(
             event_id=event_id,

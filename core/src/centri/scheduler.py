@@ -41,7 +41,7 @@ class Scheduler:
         ingestor: Any = None,
         ingest_db_path: str = "",
         llm_tier: Any = None,
-        llm_staleness_ticks: int = 4,
+        llm_staleness_ticks: int = 2,
     ):
         self._db = db
         self._jobs = jobs
@@ -147,8 +147,9 @@ class Scheduler:
             return 0
         import json
 
+        # Fetch oldest events to catch up gradually
         try:
-            rows = await self._db.events_after(
+            old_rows = await self._db.events_after(
                 after_ts=self._last_consolidated_ts,
                 after_id=self._last_consolidated_id,
                 limit=self._consolidation_batch,
@@ -157,9 +158,53 @@ class Scheduler:
             logger.debug("Consolidation event read failed", exc_info=True)
             return 0
 
-        # events_after is oldest-first and already bounded to the work this tick.
+        # Fetch recent events to interleave and prevent starvation of new events (like hermes.*)
+        recent_rows = []
+        try:
+            recent_rows = await self._db.recent_events(limit=self._consolidation_batch)
+        except Exception:
+            logger.debug("Recent events read failed", exc_info=True)
+
+        # Merge and deduplicate using process-lifetime seen cache
+        combined_rows = []
+        seen_ids = getattr(self, "_processed_event_ids", None)
+        if seen_ids is None:
+            seen_ids = set()
+            self._processed_event_ids = seen_ids
+
+        # First add oldest rows, updating HWM
+        newest_ts = self._last_consolidated_ts
+        newest_id = self._last_consolidated_id
+        for row in old_rows:
+            rid = row.get("id")
+            if rid in seen_ids:
+                continue
+            seen_ids.add(rid)
+            combined_rows.append(row)
+            
+            ts = row.get("ts") or ""
+            eid = str(rid or "")
+            if (ts, eid) > (newest_ts, newest_id):
+                newest_ts = ts
+                newest_id = eid
+
+        # Then add recent rows
+        for row in recent_rows:
+            rid = row.get("id")
+            if rid in seen_ids:
+                continue
+            seen_ids.add(rid)
+            combined_rows.append(row)
+
+        if not combined_rows:
+            # If we had old rows but they were already seen, we still need to advance HWM
+            if old_rows:
+                self._last_consolidated_ts = newest_ts
+                self._last_consolidated_id = newest_id
+            return 0
+
         fresh: List[dict] = []
-        for row in rows:
+        for row in combined_rows:
             ts = row.get("ts") or ""
             raw = row.get("payload_json")
             try:
@@ -176,19 +221,6 @@ class Scheduler:
                 }
             )
 
-        if not fresh:
-            return 0
-
-        # The query above is already capped. Draining a bounded batch per tick
-        # advances the high-water mark gradually and keeps the server responsive.
-        newest_ts = self._last_consolidated_ts
-        newest_id = self._last_consolidated_id
-        for ev in fresh:
-            ts = ev.pop("_ts", "") or ""
-            eid = str(ev.get("id") or "")
-            if (ts, eid) > (newest_ts, newest_id):
-                newest_ts = ts
-                newest_id = eid
         # Stage unhinted events for the LLM tier before the deterministic fold so
         # the two tiers see the same window; the deterministic tier still ignores
         # unhinted events (it only reads hints).
@@ -198,6 +230,7 @@ class Scheduler:
             for ev in fresh:
                 if not event_has_hints(ev.get("payload") or {}):
                     self._llm_backlog.append(ev)
+
         written = await self._consolidator.consume_events(fresh)
         self._last_consolidated_ts = newest_ts
         self._last_consolidated_id = newest_id

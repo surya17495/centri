@@ -205,8 +205,17 @@ class TestOpenCodeIngest:
              "2026-06-01T10:05:00Z"),
         ])
         await ingestor.ingest(oc, source="oc-test")
-        # Consolidate the ingested events into the typed graph.
-        worker = Consolidator(db, graph)
+        # Consolidate the ingested events into the typed graph using the LLM tier.
+        from tests.test_llm_consolidation import FakeLLM, _ops_json
+        from centri.consolidation import ConsolidationLLMTier
+        
+        llm = FakeLLM([
+            _ops_json(
+                {"op": "add_fact", "topic": "auth service naming", "statement": "Decided to name the auth service authsvc and front it with a gateway in /auth.", "tags": ["auth"]}
+            )
+        ])
+        tier = ConsolidationLLMTier(db, graph, client=llm, batch_threshold=1)
+        
         rows = list(reversed(await db.recent_events(limit=200)))
         import json
         events = [
@@ -214,9 +223,11 @@ class TestOpenCodeIngest:
              "payload": json.loads(r["payload_json"]) if r.get("payload_json") else {}}
             for r in rows
         ]
-        written = await worker.consume_events(events)
-        assert written >= 1
-        # The assistant message became a typed fact; a brief cued on "auth"
+        
+        res = await tier.consume_unhinted(events, force=True)
+        assert res["applied"] >= 1
+        
+        # The assistant message became a typed fact via LLM consolidation; a brief cued on "auth"
         # surfaces it (acceptance criterion).
         assembler = MemoryBriefAssembler(graph)
         section = await assembler.assemble("auth service naming")

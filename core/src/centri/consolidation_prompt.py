@@ -211,22 +211,86 @@ def parse_ops(content: Optional[str]) -> Tuple[List[Dict[str, Any]], Optional[st
     """
     if not content or not content.strip():
         return [], "empty response"
-    raw = _extract_json_array(content)
-    if raw is None:
-        return [], "no JSON array found in response"
+
+    # If the entire content is a single JSON object/dict (or markdown-fenced one),
+    # reject it as it is not a JSON array of objects.
     try:
-        data = json.loads(raw)
-    except (TypeError, ValueError) as exc:
-        return [], f"invalid JSON: {exc}"
-    if not isinstance(data, list):
-        return [], "response JSON is not an array"
-    ops: List[Dict[str, Any]] = []
-    for item in data:
-        if isinstance(item, dict):
-            ops.append(item)
+        stripped = content.strip()
+        if stripped.startswith("```"):
+            lines = stripped.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            stripped = "\n".join(lines).strip()
+        single_val = json.loads(stripped)
+        if isinstance(single_val, dict):
+            return [], "response JSON is not an array"
+    except Exception:
+        pass
+
+    raw = _extract_json_array(content)
+    if raw is not None:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, list):
+                ops: List[Dict[str, Any]] = []
+                for item in data:
+                    if isinstance(item, dict):
+                        ops.append(item)
+                    else:
+                        return [], "array contains a non-object op"
+                return ops, None
+        except Exception:
+            pass
+
+    # Fallback: try to find and parse individual JSON objects in the response
+    # (e.g. if the model outputted separate objects or markdown blocks rather than a single array)
+    ops = []
+    start = 0
+    while True:
+        start_idx = content.find("{", start)
+        if start_idx == -1:
+            break
+        depth = 0
+        in_str = False
+        esc = False
+        end_idx = -1
+        for i in range(start_idx, len(content)):
+            ch = content[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end_idx = i
+                    break
+        if end_idx != -1:
+            obj_str = content[start_idx : end_idx + 1]
+            try:
+                obj = json.loads(obj_str)
+                if isinstance(obj, dict):
+                    ops.append(obj)
+            except Exception:
+                pass
+            start = end_idx + 1
         else:
-            return [], "array contains a non-object op"
-    return ops, None
+            start = start_idx + 1
+
+    if ops:
+        return ops, None
+
+    return [], "no valid JSON array or objects found in response"
 
 
 def _extract_json_array(content: str) -> Optional[str]:
