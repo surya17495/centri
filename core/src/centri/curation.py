@@ -1115,6 +1115,31 @@ class VerbatimMatch:
     thread_id: Optional[str] = None
 
 
+# Source-priority ordering for verbatim recall. User utterances are the most
+# important signal (what the person actually said), followed by assistant
+# responses, then session activity, then everything else. Tool output and
+# system events sort last — they are reference material, not conversation.
+_VERBATIM_SOURCE_PRIORITY = {
+    "user": 0,
+    "utterance": 0,
+    "assistant": 1,
+    "transcript": 1,
+    "message": 1,
+    "session": 2,
+    "tool": 3,
+    "system": 3,
+}
+
+
+def _verbatim_source_priority(source: str) -> int:
+    """Sort key for verbatim matches: lower = higher priority."""
+    s = (source or "").lower()
+    for keyword, priority in _VERBATIM_SOURCE_PRIORITY.items():
+        if keyword in s:
+            return priority
+    return 2
+
+
 @dataclass
 class CuratedBrief:
     """The assembled brief: ambient + cued lines, stamped and explainable."""
@@ -1285,6 +1310,10 @@ async def curate(
         v for v in verbatim
         if (hash(v.text[:200]) not in _seen and not _seen.add(hash(v.text[:200])))
     ]
+
+    # Source-priority sort: user messages rank above assistant, which ranks
+    # above system/tool output. Within the same tier, BM25 order is preserved.
+    verbatim.sort(key=lambda v: _verbatim_source_priority(v.source))
 
     return CuratedBrief(
         policy_version=policy_version,
@@ -1460,6 +1489,20 @@ class Curator:
         active_task: Optional[str] = None,
         budget: Optional[Budget] = None,
     ) -> Tuple[CuratedBrief, List[Candidate], Cue]:
+        # Working memory: read short-lived thread context so mid-session
+        # continuity doesn't depend on re-deriving state from the full spine.
+        # If the caller didn't supply active_files or active_task but working
+        # memory has them from a prior turn, use those.
+        if thread_id:
+            try:
+                wm = await self._graph._db.get_working_context(thread_id)
+                if not active_files and wm.get("active_files"):
+                    active_files = [f for f in wm["active_files"].split("\n") if f]
+                if not active_task and wm.get("active_task"):
+                    active_task = wm["active_task"]
+            except Exception:
+                pass
+
         # P4: Auto-fetch recent thread events when the caller didn't supply
         # recent_turns but did supply a thread_id. This makes the existing
         # anaphora resolution actually fire — without it, "it"/"that"/"continue"
@@ -1513,4 +1556,19 @@ class Curator:
             embedding_provider=self._embeddings,
             thread_id=thread_id,
         )
+
+        # Write working memory: store the current utterance and active state so
+        # the next turn can pick up where this one left off without re-scanning
+        # the full spine.
+        if thread_id:
+            try:
+                if utterance:
+                    await self._graph._db.set_working_context(thread_id, "last_utterance", utterance)
+                if active_task:
+                    await self._graph._db.set_working_context(thread_id, "active_task", active_task)
+                if active_files:
+                    await self._graph._db.set_working_context(thread_id, "active_files", "\n".join(active_files))
+            except Exception:
+                pass
+
         return brief, candidates, cue
