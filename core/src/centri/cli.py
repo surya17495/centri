@@ -110,6 +110,26 @@ async def _memory_rebuild(embed: bool) -> int:
     return 0
 
 
+async def _memory_reconcile() -> int:
+    """Close legacy-provenance open loops (HAL/Hermes/mempalace).
+
+    Marks any still-open or dormant loop whose tags include ``hermes``,
+    ``hal``, or ``mempalace`` as ``done``. The rows stay in the graph — only
+    the state changes — so audit history is preserved while the prospective
+    surface stops pushing legacy intents.
+    """
+    from centri.db import Database
+    from centri.memory_graph import MemoryGraph
+
+    db = Database()
+    graph = MemoryGraph(db)
+    await graph.ensure_tables()
+    closed = await graph.reconcile_legacy_loops()
+    await db.close()
+    logger.info("memory reconcile: closed %d legacy open loop(s)", closed)
+    return 0
+
+
 def run(argv: list[str] | None = None) -> None:
     """CLI dispatch. No subcommand => launch the server (backward compatible)."""
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -135,6 +155,14 @@ def run(argv: list[str] | None = None) -> None:
     )
     rebuild_p.set_defaults(
         func=lambda args: sys.exit(asyncio.run(_memory_rebuild(args.embed)))
+    )
+
+    reconcile_p = memory_sub.add_parser(
+        "reconcile",
+        help="Close legacy HAL/Hermes/mempalace open loops (non-destructive).",
+    )
+    reconcile_p.set_defaults(
+        func=lambda args: sys.exit(asyncio.run(_memory_reconcile()))
     )
 
     args = parser.parse_args(argv)

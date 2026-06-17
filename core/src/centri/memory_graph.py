@@ -426,6 +426,25 @@ class MemoryGraph:
         await self._db._execute("DELETE FROM mem_facts")
         await self._db._execute("DELETE FROM mem_open_loops")
 
+    async def reconcile_legacy_loops(self) -> int:
+        """Mark still-open legacy-provenance loops as ``done``.
+
+        Non-destructive: the rows stay in the graph (audit history preserved),
+        only the state transitions from ``open``/``dormant`` to ``done``.
+        Legacy loops are identified by the ``hermes``/``hal``/``mempalace`` tag
+        set the ingestors stamp on them. Returns the count of loops closed.
+        """
+        await self.ensure_tables()
+        legacy_tags = ("hermes", "hal", "mempalace")
+        closed = 0
+        for loop in await self.open_loops(states=[LOOP_OPEN, LOOP_DORMANT]):
+            tags_lower = {t.lower() for t in loop.tags}
+            if not (set(legacy_tags) & tags_lower):
+                continue
+            await self.set_loop_state(loop.id, LOOP_DONE)
+            closed += 1
+        return closed
+
     async def counts(self) -> Dict[str, int]:
         await self.ensure_tables()
         out: Dict[str, int] = {}

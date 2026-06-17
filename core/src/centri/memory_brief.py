@@ -30,6 +30,13 @@ from centri.memory_graph import (
     OpenLoop,
 )
 
+LEGACY_TAGS = frozenset({"hermes", "hal", "mempalace"})
+_LEGACY_CUE_TOKENS = frozenset({"hal", "hermes", "mempalace", "hindsight", "legacy"})
+
+
+def _is_legacy(tags: list[str]) -> bool:
+    return bool(LEGACY_TAGS & {t.lower() for t in tags})
+
 _STOPWORDS = {
     "the", "a", "an", "to", "for", "of", "and", "or", "in", "on", "with", "we",
     "i", "it", "is", "be", "do", "does", "this", "that", "improve", "fix", "add",
@@ -112,11 +119,18 @@ class MemoryBriefAssembler:
         cue_tokens = _tokens(cue)
         await self._graph.ensure_tables()
 
+        asks_legacy = bool(_LEGACY_CUE_TOKENS & set(cue_tokens))
+
         all_decisions = await self._graph.current_decisions(repo_id=repo_id)
+        if not asks_legacy:
+            all_decisions = [d for d in all_decisions if not _is_legacy(d.tags)]
         adopted = [d for d in all_decisions if d.stance != STANCE_REJECTED]
         rejected = [d for d in all_decisions if d.stance == STANCE_REJECTED]
         facts = await self._graph.current_facts(repo_id=repo_id)
         loops = await self._graph.open_loops(repo_id=repo_id, states=[LOOP_OPEN])
+        if not asks_legacy:
+            facts = [f for f in facts if not _is_legacy(f.tags)]
+            loops = [lp for lp in loops if not _is_legacy(lp.tags)]
 
         def rank_decisions(items: List[Decision]) -> List[Decision]:
             scored = [(_relevance(cue_tokens, d.topic, d.statement, d.rationale, *d.tags), d) for d in items]

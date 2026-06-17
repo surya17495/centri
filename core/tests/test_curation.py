@@ -444,3 +444,246 @@ class TestCurator:
         b = Budget.from_settings(S())
         w = RankWeights.from_settings(S())
         assert b.total == 123 and w.overlap == 2.0
+
+
+# ---------------------------------------------------------------------------
+# Legacy suppression — HAL/Hermes/mempalace items treated as legacy
+# ---------------------------------------------------------------------------
+class TestLegacySuppression:
+    """When Centri is the active memory provider, items ingested from HAL,
+    Hermes, or mempalace are suppressed from the brief unless the cue
+    explicitly mentions them."""
+
+    async def test_legacy_fact_suppressed_from_brief(self, graph):
+        await graph.add_fact(
+            Fact(
+                id="lf1",
+                topic="payment flow",
+                statement="Hermes used Stripe webhooks for payment sync",
+                source_event_id="evt-lf1",
+                created_at="2026-01-01T00:00:00+00:00",
+                tags=["hermes", "hal", "transcript"],
+            )
+        )
+        await graph.add_fact(
+            Fact(
+                id="lf2",
+                topic="payment flow",
+                statement="Centri uses event-sourced payment ledger",
+                source_event_id="evt-lf2",
+                created_at="2026-01-02T00:00:00+00:00",
+                tags=["convention"],
+            )
+        )
+        cue = await CueBuilder(graph).build("payment flow setup")
+        brief = await curate(graph, cue)
+        rendered = brief.render()
+        assert "Centri uses event-sourced" in rendered
+        assert "Hermes" not in rendered
+
+    async def test_legacy_fact_surfaces_when_cue_mentions_legacy(self, graph):
+        await graph.add_fact(
+            Fact(
+                id="lf1",
+                topic="payment flow",
+                statement="Hermes used Stripe webhooks for payment sync",
+                source_event_id="evt-lf1",
+                created_at="2026-01-01T00:00:00+00:00",
+                tags=["hermes", "hal", "transcript"],
+            )
+        )
+        cue = await CueBuilder(graph).build("what did hermes do for payment")
+        brief = await curate(graph, cue)
+        rendered = brief.render()
+        assert "Hermes" in rendered
+
+    async def test_legacy_fact_excluded_from_candidates(self, graph):
+        await graph.add_fact(
+            Fact(
+                id="lf1",
+                topic="auth",
+                statement="hal stored tokens in localStorage",
+                source_event_id="evt-lf1",
+                created_at="2026-01-01T00:00:00+00:00",
+                tags=["hal", "ingest"],
+            )
+        )
+        await graph.add_fact(
+            Fact(
+                id="f1",
+                topic="auth",
+                statement="Centri stores tokens in httpOnly cookies",
+                source_event_id="evt-f1",
+                created_at="2026-01-02T00:00:00+00:00",
+                tags=["convention"],
+            )
+        )
+        cue = await CueBuilder(graph).build("auth tokens")
+        cands = await gather_candidates(graph, cue, None)
+        keys = [c.key for c in cands]
+        assert not any("lf1" in k for k in keys)
+        assert any("f1" in k for k in keys)
+
+    async def test_legacy_fact_included_when_cue_mentions_hal(self, graph):
+        await graph.add_fact(
+            Fact(
+                id="lf1",
+                topic="auth",
+                statement="hal stored tokens in localStorage",
+                source_event_id="evt-lf1",
+                created_at="2026-01-01T00:00:00+00:00",
+                tags=["hal", "ingest"],
+            )
+        )
+        cue = await CueBuilder(graph).build("check hal auth setup")
+        cands = await gather_candidates(graph, cue, None)
+        assert any("lf1" in c.key for c in cands)
+
+    async def test_mempalace_tag_suppressed(self, graph):
+        await graph.add_fact(
+            Fact(
+                id="mp1",
+                topic="deploy",
+                statement="mempalace recorded deploy via fly.io",
+                source_event_id="evt-mp1",
+                created_at="2026-01-01T00:00:00+00:00",
+                tags=["mempalace", "memory"],
+            )
+        )
+        cue = await CueBuilder(graph).build("deploy setup")
+        brief = await curate(graph, cue)
+        assert "mempalace" not in brief.render().lower()
+
+    async def test_non_legacy_ingest_not_suppressed(self, graph):
+        # The "ingest" tag alone is NOT legacy — opencode/claude_code/cursor all
+        # use it. Only hermes/hal/mempalace mark legacy provenance.
+        await graph.add_fact(
+            Fact(
+                id="oc1",
+                topic="deploy",
+                statement="opencode recorded deploy via fly.io",
+                source_event_id="evt-oc1",
+                created_at="2026-01-01T00:00:00+00:00",
+                tags=["opencode", "ingest", "transcript"],
+            )
+        )
+        cue = await CueBuilder(graph).build("deploy setup")
+        brief = await curate(graph, cue)
+        assert "fly.io" in brief.render()
+
+    async def test_golden_snapshot_unaffected(self, graph):
+        # The golden seed has no legacy-tagged items, so the brief is unchanged.
+        await _seed(graph)
+        cue = await CueBuilder(graph).build("what's our jwt refresh and testing setup")
+        brief = await curate(graph, cue)
+        assert brief.render() == GOLDEN
+
+
+# ---------------------------------------------------------------------------
+# MemoryBriefAssembler legacy suppression (fallback path)
+# ---------------------------------------------------------------------------
+class TestMemoryBriefLegacySuppression:
+    async def test_legacy_fact_suppressed_in_fallback_assembler(self, graph):
+        from centri.memory_brief import MemoryBriefAssembler
+
+        await graph.add_fact(
+            Fact(
+                id="lf1",
+                topic="deploy",
+                statement="hermes deployed via fly.io",
+                source_event_id="evt-lf1",
+                created_at="2026-01-01T00:00:00+00:00",
+                tags=["hermes", "hal", "transcript"],
+            )
+        )
+        await graph.add_fact(
+            Fact(
+                id="f1",
+                topic="deploy",
+                statement="Centri deploys via docker compose",
+                source_event_id="evt-f1",
+                created_at="2026-01-02T00:00:00+00:00",
+                tags=["convention"],
+            )
+        )
+        section = await MemoryBriefAssembler(graph).assemble("deploy setup")
+        rendered = section.render()
+        assert "docker compose" in rendered
+        assert "hermes" not in rendered.lower()
+
+    async def test_legacy_fact_surfaces_in_fallback_when_cue_mentions_legacy(self, graph):
+        from centri.memory_brief import MemoryBriefAssembler
+
+        await graph.add_fact(
+            Fact(
+                id="lf1",
+                topic="deploy",
+                statement="hermes deployed via fly.io",
+                source_event_id="evt-lf1",
+                created_at="2026-01-01T00:00:00+00:00",
+                tags=["hermes", "hal", "transcript"],
+            )
+        )
+        section = await MemoryBriefAssembler(graph).assemble("what did hermes deploy")
+        assert "hermes" in section.render().lower()
+
+
+# ---------------------------------------------------------------------------
+# Legacy open-loop reconciliation
+# ---------------------------------------------------------------------------
+class TestReconcileLegacyLoops:
+    async def test_legacy_loops_closed_non_destructive(self, graph):
+        from centri.memory_graph import LOOP_DONE, LOOP_OPEN
+
+        await graph.add_open_loop(
+            OpenLoop(
+                id="ll1",
+                intent="migrate hermes payment webhooks",
+                source_event_id="evt-ll1",
+                created_at="2026-01-01T00:00:00+00:00",
+                tags=["hermes", "hal"],
+            )
+        )
+        await graph.add_open_loop(
+            OpenLoop(
+                id="ll2",
+                intent="review mempalace memory schema",
+                source_event_id="evt-ll2",
+                created_at="2026-01-02T00:00:00+00:00",
+                tags=["mempalace"],
+            )
+        )
+        await graph.add_open_loop(
+            OpenLoop(
+                id="nl1",
+                intent="wire jwt refresh rotation",
+                source_event_id="evt-nl1",
+                created_at="2026-01-03T00:00:00+00:00",
+                tags=["auth"],
+            )
+        )
+        closed = await graph.reconcile_legacy_loops()
+        assert closed == 2
+
+        # Non-destructive: rows still exist, just state changed.
+        legacy1 = await graph.get_open_loop("ll1")
+        legacy2 = await graph.get_open_loop("ll2")
+        assert legacy1.state == LOOP_DONE
+        assert legacy2.state == LOOP_DONE
+
+        # Non-legacy loop untouched.
+        normal = await graph.get_open_loop("nl1")
+        assert normal.state == LOOP_OPEN
+
+    async def test_no_legacy_loops_returns_zero(self, graph):
+        await graph.add_open_loop(
+            OpenLoop(
+                id="nl1",
+                intent="wire jwt refresh rotation",
+                source_event_id="evt-nl1",
+                created_at="2026-01-01T00:00:00+00:00",
+                tags=["auth"],
+            )
+        )
+        closed = await graph.reconcile_legacy_loops()
+        assert closed == 0

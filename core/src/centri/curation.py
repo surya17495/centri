@@ -52,7 +52,7 @@ from centri.memory_graph import (
 # Bump when the curation policy changes in a way that alters briefs. Golden
 # snapshots are keyed by this, so a deliberate change is a new snapshot, never a
 # silent drift.
-POLICY_VERSION = "3c.0"
+POLICY_VERSION = "3c.2"
 
 # Unit 2 (semantic leg ON): when the embedding-similarity feature carries a
 # POSITIVE weight, briefs can change shape (a paraphrase with zero token overlap
@@ -62,7 +62,7 @@ POLICY_VERSION = "3c.0"
 # golden; only an explicitly-enabled positive embedding weight selects this
 # version (and its own golden). The active version is chosen by
 # :func:`active_policy_version` from the weights, never silently.
-POLICY_VERSION_EMBED = "3c.1-embed"
+POLICY_VERSION_EMBED = "3c.2-embed"
 
 
 def active_policy_version(weights: "RankWeights") -> str:
@@ -94,6 +94,32 @@ _TYPE_PRIOR = {
     "fact": 0.5,
     "observation": 0.25,
 }
+
+# Tags marking typed-graph nodes as legacy-provenance — ingested from HAL,
+# Hermes, or migrated mempalace memory. When Centri is the active memory
+# provider these are suppressed from the brief unless the cue explicitly
+# references the legacy system, so stale imported memory does not crowd out
+# live Centri state. Audit history is never deleted: the rows stay in the
+# graph and remain visible to fact_history / open_loops queries.
+LEGACY_TAGS = frozenset({"hermes", "hal", "mempalace"})
+
+# Cue tokens that opt into legacy surfacing. When any of these appear in the
+# cue's term set, legacy items are NOT suppressed — the user is asking about
+# old memory and should see it.
+_LEGACY_CUE_TOKENS = frozenset({"hal", "hermes", "mempalace", "hindsight", "legacy"})
+
+
+def _is_legacy_tags(tags: Sequence[str]) -> bool:
+    return bool(LEGACY_TAGS & {t.lower() for t in tags})
+
+
+def _is_legacy_source(source: str) -> bool:
+    s = (source or "").lower()
+    return "hermes" in s or "mempalace" in s or "hal" in s
+
+
+def _cue_asks_for_legacy(cue: "Cue") -> bool:
+    return bool(_LEGACY_CUE_TOKENS & cue.term_set())
 
 
 @dataclass(frozen=True)
@@ -913,12 +939,13 @@ async def gather_candidates(
             )
         )
 
+    # Legacy suppression: when Centri is the active memory provider, items
+    # ingested from HAL/Hermes/mempalace are treated as legacy and removed
+    # from the candidate pool unless the cue explicitly mentions them.
+    if not _cue_asks_for_legacy(cue):
+        cands = [c for c in cands if not _is_legacy_tags(c.tags)]
+
     return cands
-
-
-# ---------------------------------------------------------------------------
-# D. Ambient layer
-# ---------------------------------------------------------------------------
 AMBIENT_TOPIC = "ambient-standing-context"
 
 # A fact tagged with this is the consolidation-maintained ambient digest. Stored
@@ -1145,6 +1172,11 @@ async def curate(
                     )
             except Exception:
                 pass
+
+    # Apply the same legacy suppression to verbatim event matches: HAL/Hermes/
+    # mempalace events stay out of the brief unless the cue asks for them.
+    if not _cue_asks_for_legacy(cue):
+        verbatim = [v for v in verbatim if not _is_legacy_source(v.source)]
 
     return CuratedBrief(
         policy_version=policy_version,
