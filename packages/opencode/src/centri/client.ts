@@ -31,6 +31,7 @@ export type RecallResult = {
 
 export type RecallOptions = {
   threadID?: string
+  repoID?: string
   budgetTokens?: number
   signal?: AbortSignal
 }
@@ -40,6 +41,7 @@ export type Envelope = {
   ts: string
   source: string
   thread_id?: string
+  repo_id?: string
   payload: Record<string, unknown> & { event_uid: string }
 }
 
@@ -93,6 +95,7 @@ export async function recall(cue: string, opts?: RecallOptions): Promise<RecallR
       body: JSON.stringify({
         cue,
         thread_id: opts?.threadID,
+        repo_id: opts?.repoID,
         budget_tokens: opts?.budgetTokens ?? 1200,
         format: "markdown+items",
       }),

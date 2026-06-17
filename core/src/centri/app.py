@@ -60,6 +60,7 @@ class RecallRequest(BaseModel):
     # active file paths; budget_tokens overrides the configured brief budget.
     cue: str
     thread_id: str | None = None
+    repo_id: str | None = None
     budget_tokens: int | None = None
     format: str = "markdown+items"
 
@@ -428,7 +429,7 @@ async def memory_recall(req: RecallRequest) -> Dict[str, Any]:
         )
 
     brief, _candidates, _cue = await runtime.curator.assemble(
-        req.cue, thread_id=req.thread_id, budget=budget
+        req.cue, thread_id=req.thread_id, repo_id=req.repo_id, budget=budget
     )
     return _recall_response(brief, int((time.perf_counter() - started) * 1000))
 
@@ -443,12 +444,17 @@ async def memory_ambient_md(repo_id: str | None = None) -> str:
     fork system prompt verbatim. Auth accepts the shared secret as a ``?token=``
     query param in addition to the bearer header (an <a href> cannot set headers).
     Fails OPEN: an unbooted memory plane yields an empty body, never an error.
+
+    Obsolete HAL/Hermes/mempalace content is suppressed unless the request
+    explicitly scopes to a legacy repo_id — the same suppression the curation
+    pipeline applies to the cued brief.
     """
-    from centri.curation import load_ambient
+    from centri.curation import load_ambient, _suppress_ambient_legacy
 
     if runtime.memory_graph is None:
         return ""
     ambient = await load_ambient(runtime.memory_graph, repo_id=repo_id)
+    ambient = _suppress_ambient_legacy(ambient)
     # A large budget so the standing layer renders in full here (the brief trims
     # it to fit a turn; this endpoint is the unabridged source).
     return ambient.render(100_000)

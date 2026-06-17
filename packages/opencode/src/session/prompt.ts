@@ -1339,7 +1339,7 @@ export const layer = Layer.effect(
             if (step === 1) {
               const cue = centriCue(msgs)
               if (cue) {
-                const brief = yield* Effect.promise(() => Centri.recall(cue, { threadID: sessionID }))
+                const brief = yield* Effect.promise(() => Centri.recall(cue, { threadID: sessionID, repoID: ctx.directory }))
                 if (brief?.markdown.trim()) system.push(brief.markdown)
               }
             }

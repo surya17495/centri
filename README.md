@@ -81,14 +81,7 @@ See [`docs/README.md`](docs/README.md) for the full index, or
 
 ## Quickstart
 
-### Docker
-
-```bash
-cp .env.example .env        # fill in your model gateway keys (BYOK)
-docker compose up -d        # core on :8760, web shell on :8761
-```
-
-### Manual
+### From source
 
 ```bash
 cd core
@@ -107,6 +100,22 @@ The API listens on `127.0.0.1:8760` by default. Health checks:
 curl localhost:8760/health
 curl localhost:8760/status
 ```
+
+### OpenCode fork
+
+The OpenCode app shell (web + TUI) is the default client. Build and run it from
+[`packages/opencode/`](packages/opencode):
+
+```bash
+cd packages/opencode
+bun install
+bun dev          # TUI
+bun web          # web UI on :4096
+```
+
+Point it at the core via `CENTRI_URL` and `CENTRI_TOKEN` environment variables
+(see [`.env.example`](.env.example)). The fork transparently taps runtime events
+into the memory spine and recalls a brief before each turn.
 
 ## Configuration
 

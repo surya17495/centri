@@ -41,6 +41,7 @@ function toEnvelope(event: GlobalEvent): Envelope | undefined {
     ts,
     source: "centri-app",
     thread_id: mapped.threadID,
+    repo_id: mapped.repoID,
     payload: { ...mapped.payload, event_uid: eventUID },
   }
 }
@@ -51,14 +52,18 @@ function toEnvelope(event: GlobalEvent): Envelope | undefined {
 function mapType(
   type: string,
   props: Record<string, unknown>,
-): { type: string; threadID?: string; payload: Record<string, unknown> } | undefined {
+): { type: string; threadID?: string; repoID?: string; payload: Record<string, unknown> } | undefined {
   const sessionID = (props.sessionID ?? props.session_id) as string | undefined
+  const info = (props.info ?? {}) as Record<string, unknown>
+  // Session directory is the project root — pass it through as repo_id so the
+  // core can resolve a project and scope the event.
+  const directory = (info.directory ?? info.dir ?? info.path) as string | undefined
 
   switch (type) {
     case "session.created":
-      return { type: "session.created", threadID: sessionID, payload: { info: props.info } }
+      return { type: "session.created", threadID: sessionID, repoID: directory, payload: { info: props.info } }
     case "session.updated":
-      return { type: "session.updated", threadID: sessionID, payload: { info: props.info } }
+      return { type: "session.updated", threadID: sessionID, repoID: directory, payload: { info: props.info } }
     case "session.deleted":
       return { type: "session.idle", threadID: sessionID, payload: { reason: "deleted" } }
     case "session.idle":
