@@ -11,6 +11,7 @@ import { Flag } from "@opencode-ai/core/flag/flag"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { Global } from "@opencode-ai/core/global"
+import { Centri } from "@/centri/client" // CENTRI
 import type { MessageV2 } from "./message-v2"
 import type { MessageID } from "./schema"
 
@@ -158,6 +159,11 @@ export const layer: Layer.Layer<
       const urls = (config.instructions ?? []).filter(
         (item) => item.startsWith("https://") || item.startsWith("http://"),
       )
+      // CENTRI: automatically attach the ambient memory layer when the memory
+      // core is configured. This uses OpenCode's native remote-instruction path;
+      // dead/slow core => empty string via fetch() fail-open above.
+      const centriAmbient = Centri.ambientUrl()
+      if (centriAmbient) urls.push(centriAmbient)
 
       const files = yield* Effect.forEach(Array.from(paths), read, { concurrency: 8 })
       const remote = yield* Effect.forEach(urls, fetch, { concurrency: 4 })

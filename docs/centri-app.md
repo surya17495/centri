@@ -25,6 +25,9 @@ Inline patches (each marked `// CENTRI`, minimal):
 - `packages/opencode/src/session/system.ts` — import `PROMPT_CENTRI`; append it
   as an ADDITIONAL system entry for every provider (provider-native prompts are
   preserved, not replaced).
+- `packages/opencode/src/session/instruction.ts` — automatically appends
+  `Centri.ambientUrl()` to OpenCode's native remote instruction URL list when
+  `CENTRI_URL` is set.
 
 Rebrand (user-visible product name only — no package/binary renames):
 - `packages/app/index.html` — `<title>` → Centri
@@ -50,8 +53,8 @@ strict config schema (a low-risk choice for the demo; can be added later).
 - `POST /events/import` — write path. Batched (flush every 2s or 50 events),
   fire-and-forget, 5s timeout. Drops a failed batch rather than retry-looping.
 - `GET /memory/ambient.md?token=` — ambient layer. `Centri.ambientUrl()` builds
-  the URL; wiring it into OpenCode's native instruction-URL fetcher is left as a
-  follow-up (the function is exported and ready).
+  the URL; `instruction.system()` appends it to the native remote-instruction
+  fetch list when the core is configured.
 
 ## How per-turn injection works
 
@@ -118,5 +121,5 @@ Needs a real machine / live core (NOT verified in sandbox):
   available in the sandbox).
 - The full demo script above (requires both the core and a browser).
 - Desktop (Electron) packaging with the rebranded names.
-- Ambient instruction-URL wiring (function exists; not yet hooked into
-  `session/instruction.ts`).
+- Ambient instruction-URL wiring is implemented; verify the fetched ambient text
+  appears in a live model request when `CENTRI_URL` is set.

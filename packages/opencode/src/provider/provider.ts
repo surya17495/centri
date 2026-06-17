@@ -1422,7 +1422,7 @@ export const layer = Layer.effect(
                 interleaved:
                   model.interleaved ??
                   existingModel?.capabilities.interleaved ??
-                  (!existingModel && apiNpm === "@ai-sdk/openai-compatible" && apiID.includes("deepseek")
+                  ((!existingModel && apiNpm === "@ai-sdk/openai-compatible" && (apiID.includes("deepseek") || apiID.includes("glm")))
                     ? { field: "reasoning_content" }
                     : false),
               },
