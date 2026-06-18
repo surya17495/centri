@@ -710,6 +710,50 @@ class TestBridgeRecall:
         finally:
             await db.close()
 
+    async def test_recall_response_prepends_live_project_state(self):
+        from centri.app import _recall_response
+
+        class Ambient:
+            identity = []
+            active_projects = []
+            open_loops = []
+            narrative = ""
+
+        class Brief:
+            lines = []
+            ambient = Ambient()
+            policy_version = "test"
+            graph_high_water = "hw"
+
+            def render(self):
+                return "Memory body"
+
+        r = _recall_response(Brief(), 1, "Live Project State\nCHANGELOG.md ## WIP\n- keep this first")
+        assert r["markdown"].startswith("Live Project State")
+        assert "Memory body" in r["markdown"]
+
+    async def test_changelog_wip_keeps_multiple_threads(self):
+        from centri.app import _changelog_wip
+
+        tmpdir = tempfile.mkdtemp()
+        changelog = Path(tmpdir) / "CHANGELOG.md"
+        changelog.write_text(
+            "# Log\n\n"
+            "## WIP\n"
+            "- 2026-06-18: **Thread A**\n"
+            "  - detail A1\n"
+            "- 2026-06-18: **Thread B**\n"
+            "  - detail B1\n"
+            "## Done\n"
+            "- old\n"
+        )
+
+        wip = _changelog_wip(changelog)
+        assert "Thread A" in wip
+        assert "detail A1" in wip
+        assert "Thread B" in wip
+        assert "old" not in wip
+
     async def test_recall_budget_tokens_caps_the_brief(self):
         from centri.app import _recall_response
         from centri.curation import Budget

@@ -494,13 +494,33 @@ def _changelog_wip(path: Path) -> str:
     content = "\n".join(lines[start + 1 : end]).strip()
     if not content:
         return ""
-    return content[:3000]
+    blocks = []
+    current = []
+    for line in content.splitlines():
+        if line.startswith("- ") and current:
+            blocks.append("\n".join(current).strip())
+            current = [line]
+            continue
+        current.append(line)
+    if current:
+        blocks.append("\n".join(current).strip())
+    if not blocks:
+        return content[:3000]
+    selected = []
+    total = 0
+    for block in blocks[:8]:
+        clipped = block[:1200]
+        if total + len(clipped) > 6000:
+            break
+        selected.append(clipped)
+        total += len(clipped)
+    return "\n\n".join(selected)
 
 
 def _git_state(root: Path) -> str:
     if not (root / ".git").exists():
         return ""
-    status = _run_git(root, ["status", "--short"])
+    status = _limit_lines(_run_git(root, ["status", "--short"]), 40)
     log = _run_git(root, ["log", "--oneline", "-5"])
     parts = []
     if status:
@@ -508,6 +528,13 @@ def _git_state(root: Path) -> str:
     if log:
         parts.append("recent git log\n" + log)
     return "\n\n".join(parts)
+
+
+def _limit_lines(text: str, limit: int) -> str:
+    lines = text.splitlines()
+    if len(lines) <= limit:
+        return text
+    return "\n".join(lines[:limit] + [f"... {len(lines) - limit} more"])
 
 
 def _run_git(root: Path, args: list[str]) -> str:
