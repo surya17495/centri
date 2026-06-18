@@ -96,14 +96,37 @@ _SESSION_TABLES = ("session", "sessions", "Session")
 
 
 def _opencode_default_locations() -> List[Path]:
-    """Well-known default opencode.db locations per platform."""
+    """Well-known default locations for OpenCode database files.
+
+    We probe both 'opencode.db' and 'opencode-main.db' (and any 'opencode-*.db'
+    glob pattern) in each default directory because the OpenCode/Centri fork
+    uses 'opencode-main.db' as its primary live DB, and databases may rotate.
+    We prefer the database with the newest mtime to avoid ingesting from
+    stale/frozen rotated databases.
+    """
     home = Path.home()
     paths: List[Path] = []
-    paths.append(home / ".local" / "share" / "opencode" / "opencode.db")
-    paths.append(home / ".config" / "opencode" / "opencode.db")
-    paths.append(home / ".opencode" / "opencode.db")
-    if sys.platform == "darwin":
-        paths.append(home / "Library" / "Application Support" / "opencode" / "opencode.db")
+    for d in [
+        home / ".local" / "share" / "opencode",
+        home / ".config" / "opencode",
+        home / ".opencode",
+        *(
+            [home / "Library" / "Application Support" / "opencode"]
+            if sys.platform == "darwin"
+            else []
+        ),
+    ]:
+        found = {f for f in d.glob("opencode-*.db") if f.is_file()}
+        if (d / "opencode.db").is_file():
+            found.add(d / "opencode.db")
+
+        if found:
+            paths.append(max(found, key=lambda x: x.stat().st_mtime))
+            continue
+
+        paths.append(d / "opencode-main.db")
+        paths.append(d / "opencode.db")
+
     return paths
 
 
