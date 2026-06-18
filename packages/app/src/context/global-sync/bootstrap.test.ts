@@ -103,6 +103,7 @@ describe("query keys", () => {
       "https://debian.example",
       null,
       "providers",
+      "true",
     ])
   })
 })

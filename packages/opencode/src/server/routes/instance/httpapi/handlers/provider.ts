@@ -8,7 +8,7 @@ import { Effect, Schema } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
-import { ProviderAuthApiError } from "../groups/provider"
+import { ProviderAuthApiError, ProviderListQuery } from "../groups/provider"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 
 function mapProviderAuthError<A, R>(self: Effect.Effect<A, ProviderAuth.Error, R>) {
@@ -37,16 +37,37 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
     const provider = yield* Provider.Service
     const svc = yield* ProviderAuth.Service
 
-    const list = Effect.fn("ProviderHttpApi.list")(function* () {
+    const list = Effect.fn("ProviderHttpApi.list")(function* (ctx: {
+      query: typeof ProviderListQuery.Type
+    }) {
       const config = yield* cfg.get()
       const all = yield* ModelsDev.Service.use((s) => s.get())
+      const connected = yield* provider.list()
+      const connectedKeys = Object.keys(connected)
+      const defaultProviderIDs = new Set<string>(["opencode", "opencode-go"])
+      if (config.model) {
+        defaultProviderIDs.add(config.model.split("/")[0])
+      }
+      if (config.small_model) {
+        defaultProviderIDs.add(config.small_model.split("/")[0])
+      }
+      const configuredProviderIDs = new Set(Object.keys(config.provider ?? {}))
+      const allowed = new Set([
+        ...connectedKeys,
+        ...defaultProviderIDs,
+        ...configuredProviderIDs,
+      ])
       const disabled = new Set(config.disabled_providers ?? [])
       const enabled = config.enabled_providers ? new Set(config.enabled_providers) : undefined
       const filtered: Record<string, (typeof all)[string]> = {}
       for (const [key, value] of Object.entries(all)) {
-        if ((enabled ? enabled.has(key) : true) && !disabled.has(key)) filtered[key] = value
+        if ((enabled ? enabled.has(key) : true) && !disabled.has(key)) {
+          if (ctx.query.configured && !allowed.has(key)) {
+            continue
+          }
+          filtered[key] = value
+        }
       }
-      const connected = yield* provider.list()
       const providers = Object.assign(
         mapValues(filtered, (item) => Provider.fromModelsDevProvider(item)),
         connected,

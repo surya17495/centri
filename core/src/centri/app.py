@@ -7,7 +7,9 @@ re-derivable index. Every route reads from / writes through the event spine.
 import hmac
 import json
 import logging
+import subprocess
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Dict
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -344,7 +346,7 @@ _KIND_OF_SECTION = {
 }
 
 
-def _recall_response(brief: Any, elapsed_ms: int) -> Dict[str, Any]:
+def _recall_response(brief: Any, elapsed_ms: int, live_project_state: str = "") -> Dict[str, Any]:
     """Shape a :class:`CuratedBrief` into the bridge-api §1 recall envelope.
 
     Pure mapping (no I/O) so it is unit-testable without the running app: every
@@ -366,8 +368,11 @@ def _recall_response(brief: Any, elapsed_ms: int) -> Dict[str, Any]:
     ambient_items = list(amb.identity) + list(amb.active_projects) + list(amb.open_loops)
     if amb.narrative:
         ambient_items.append(amb.narrative)
+    rendered = brief.render()
+    if live_project_state:
+        rendered = live_project_state + ("\n\n" + rendered if rendered else "")
     return {
-        "markdown": brief.render(),
+        "markdown": rendered,
         "items": items,
         "ambient_items": ambient_items,
         "policy_version": brief.policy_version,
@@ -428,10 +433,96 @@ async def memory_recall(req: RecallRequest) -> Dict[str, Any]:
             floor_rejections=min(base.floor_rejections, req.budget_tokens),
         )
 
+    live_project_state = _live_project_state(req.repo_id)
+    repo_scope = await _resolve_repo_scope(req.repo_id)
     brief, _candidates, _cue = await runtime.curator.assemble(
-        req.cue, thread_id=req.thread_id, repo_id=req.repo_id, budget=budget
+        req.cue, thread_id=req.thread_id, repo_id=repo_scope, budget=budget
     )
-    return _recall_response(brief, int((time.perf_counter() - started) * 1000))
+    return _recall_response(brief, int((time.perf_counter() - started) * 1000), live_project_state)
+
+
+async def _resolve_repo_scope(repo_id: str | None) -> str | None:
+    if not repo_id or runtime.db is None:
+        return repo_id
+    root = Path(repo_id).expanduser()
+    if root.is_dir():
+        return await runtime.db.resolve_project_for_repo(str(root))
+    return repo_id
+
+
+def _live_project_state(repo_id: str | None) -> str:
+    """Best-effort live repo handoff block for fresh-session continuity.
+
+    Durable memory is necessary but not enough for operational recall: project
+    repos often carry the latest handoff in files like ``CHANGELOG.md ## WIP``
+    before consolidation promotes it. When the fork passes a local repo path,
+    prepend those live artifacts to recall so "where are we" starts from the
+    actual project state before broad memory.
+    """
+    if not repo_id:
+        return ""
+    root = Path(repo_id).expanduser()
+    if not root.is_dir():
+        return ""
+    sections = []
+    wip = _changelog_wip(root / "CHANGELOG.md")
+    if wip:
+        sections.append("CHANGELOG.md ## WIP\n" + wip)
+    git_state = _git_state(root)
+    if git_state:
+        sections.append(git_state)
+    if not sections:
+        return ""
+    return "Live Project State (checked before memory recall):\n" + "\n\n".join(sections)
+
+
+def _changelog_wip(path: Path) -> str:
+    if not path.exists() or not path.is_file():
+        return ""
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return ""
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines) if line.strip().lower() == "## wip"), None)
+    if start is None:
+        return ""
+    end = next(
+        (i for i, line in enumerate(lines[start + 1 :], start + 1) if line.startswith("## ")),
+        len(lines),
+    )
+    content = "\n".join(lines[start + 1 : end]).strip()
+    if not content:
+        return ""
+    return content[:3000]
+
+
+def _git_state(root: Path) -> str:
+    if not (root / ".git").exists():
+        return ""
+    status = _run_git(root, ["status", "--short"])
+    log = _run_git(root, ["log", "--oneline", "-5"])
+    parts = []
+    if status:
+        parts.append("git status --short\n" + status)
+    if log:
+        parts.append("recent git log\n" + log)
+    return "\n\n".join(parts)
+
+
+def _run_git(root: Path, args: list[str]) -> str:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=root,
+            text=True,
+            capture_output=True,
+            timeout=0.5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return result.stdout.strip()[:2000]
 
 
 @app.get("/memory/ambient.md", response_class=PlainTextResponse)
@@ -580,8 +671,8 @@ async def events_import(req: EventImportRequest) -> Dict[str, Any]:
         ts = str(env.get("ts") or now)
         thread_id = env.get("thread_id")
         task_id = env.get("task_id")
-        repo_id = env.get("repo_id")
-        importance = str(env.get("importance") or "low")
+        repo_id = await _resolve_repo_scope(env.get("repo_id"))
+        importance = str(env.get("importance") or "normal")
         await runtime.db.append_event(
             event_id=event_id,
             type=ev_type,

@@ -1,4 +1,4 @@
-import { Component, Show } from "solid-js"
+import { Component, Show, createMemo } from "solid-js"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { popularProviders, useProviders } from "@/hooks/use-providers"
 import { Dialog } from "@opencode-ai/ui/dialog"
@@ -8,6 +8,11 @@ import { ProviderIcon } from "@opencode-ai/ui/provider-icon"
 import { DialogConnectProvider } from "./dialog-connect-provider"
 import { useLanguage } from "@/context/language"
 import { DialogCustomProvider } from "./dialog-custom-provider"
+import { useQueryOptions } from "@/context/server-sync"
+import { useQuery } from "@tanstack/solid-query"
+import { useParams } from "@solidjs/router"
+import { decode64 } from "@/utils/base64"
+import { pathKey } from "@/utils/path-key"
 
 const CUSTOM_ID = "_custom"
 
@@ -15,6 +20,11 @@ export const DialogSelectProvider: Component = () => {
   const dialog = useDialog()
   const providers = useProviders()
   const language = useLanguage()
+  const queryOptions = useQueryOptions()
+  const params = useParams()
+  const dir = createMemo(() => decode64(params.dir) ?? "")
+  const directoryKey = createMemo(() => (dir() ? pathKey(dir()) : null))
+  const fullProvidersQuery = useQuery(() => queryOptions.providers(directoryKey(), { configured: "false" }))
 
   const popularGroup = () => language.t("dialog.provider.group.popular")
   const otherGroup = () => language.t("dialog.provider.group.other")
@@ -26,6 +36,12 @@ export const DialogSelectProvider: Component = () => {
     if (id === "opencode-go") return language.t("dialog.provider.opencodeGo.tagline")
   }
 
+  const allProviders = createMemo(() => {
+    language.locale()
+    const map = fullProvidersQuery.data?.all ?? providers.all()
+    return [{ id: CUSTOM_ID, name: customLabel() }, ...map.values()]
+  })
+
   return (
     <Dialog title={language.t("command.provider.connect")} transition>
       <List
@@ -34,10 +50,7 @@ export const DialogSelectProvider: Component = () => {
         emptyMessage={language.t("dialog.provider.empty")}
         activeIcon="plus-small"
         key={(x) => x?.id}
-        items={() => {
-          language.locale()
-          return [{ id: CUSTOM_ID, name: customLabel() }, ...providers.all().values()]
-        }}
+        items={allProviders}
         filterKeys={["id", "name"]}
         groupBy={(x) => (popularProviders.includes(x.id) ? popularGroup() : otherGroup())}
         sortBy={(a, b) => {

@@ -7576,6 +7576,7 @@ export type ProviderListData = {
   query?: {
     directory?: string
     workspace?: string
+    configured?: "true" | "false"
   }
   url: "/provider"
 }

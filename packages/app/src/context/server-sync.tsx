@@ -72,8 +72,8 @@ function makeQueryOptionsApi(
   return {
     globalConfig: () => loadGlobalConfigQuery(scope, serverSDK()),
     projects: () => loadProjectsQuery(scope, serverSDK()),
-    providers: (directory: PathKey | null) =>
-      loadProvidersQuery(scope, directory, directory === null ? serverSDK() : sdkFor(directory)),
+    providers: (directory: PathKey | null, query?: { configured?: "true" | "false" }) =>
+      loadProvidersQuery(scope, directory, directory === null ? serverSDK() : sdkFor(directory), query),
     path: (directory: PathKey | null) =>
       loadPathQuery(scope, directory, directory === null ? serverSDK() : sdkFor(directory)),
     agents: (directory: PathKey) => loadAgentsQuery(scope, directory, sdkFor(directory)),
