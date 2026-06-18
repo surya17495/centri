@@ -51,7 +51,6 @@ export function createServerSdkContext(server: ServerConnection.Any, scope: Serv
   const RECONNECT_DELAY_MS = 250
 
   let queue: Queued[] = []
-  let buffer: Queued[] = []
   const coalesced = new Map<string, number>()
   const staleDeltas = new Set<string>()
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -66,7 +65,13 @@ export function createServerSdkContext(server: ServerConnection.Any, scope: Serv
       const part = payload.properties.part
       return `message.part.updated:${directory}:${part.messageID}:${part.id}`
     }
+    if (payload.type === "message.part.delta") {
+      const props = payload.properties
+      return `message.part.delta:${directory}:${props.messageID}:${props.partID}:${props.field}`
+    }
   }
+
+  const FLUSH_MAX_EVENTS = 100
 
   const flush = () => {
     if (timer) clearTimeout(timer)
@@ -74,26 +79,31 @@ export function createServerSdkContext(server: ServerConnection.Any, scope: Serv
 
     if (queue.length === 0) return
 
-    const events = queue
+    const events = queue.length > FLUSH_MAX_EVENTS ? queue.slice(0, FLUSH_MAX_EVENTS) : queue
+    const remaining = queue.length > FLUSH_MAX_EVENTS ? queue.slice(FLUSH_MAX_EVENTS) : []
     const skip = staleDeltas.size > 0 ? new Set(staleDeltas) : undefined
-    queue = buffer
-    buffer = events
-    queue.length = 0
+    queue = remaining
     coalesced.clear()
+    for (let idx = 0; idx < queue.length; idx++) {
+      const k = key(queue[idx]!.directory, queue[idx]!.payload)
+      if (k) coalesced.set(k, idx)
+    }
     staleDeltas.clear()
 
     last = Date.now()
     batch(() => {
       for (const event of events) {
         if (skip && event.payload.type === "message.part.delta") {
-          const props = event.payload.properties
+          const props = event.payload.properties as { messageID: string; partID: string; delta: string; field: string }
           if (skip.has(deltaKey(event.directory, props.messageID, props.partID))) continue
         }
         emitter.emit(event.directory, event.payload)
       }
     })
 
-    buffer.length = 0
+    if (queue.length > 0) {
+      schedule()
+    }
   }
 
   const schedule = () => {
@@ -169,10 +179,15 @@ export function createServerSdkContext(server: ServerConnection.Any, scope: Serv
             if (k) {
               const i = coalesced.get(k)
               if (i !== undefined) {
-                queue[i] = { directory, payload }
-                if (payload.type === "message.part.updated") {
-                  const part = payload.properties.part
-                  staleDeltas.add(deltaKey(directory, part.messageID, part.id))
+                if (payload.type === "message.part.delta") {
+                  const props = payload.properties as { delta: string }
+                  ;(queue[i]!.payload.properties as { delta: string }).delta += props.delta
+                } else {
+                  queue[i] = { directory, payload }
+                  if (payload.type === "message.part.updated") {
+                    const part = payload.properties.part
+                    staleDeltas.add(deltaKey(directory, part.messageID, part.id))
+                  }
                 }
                 continue
               }

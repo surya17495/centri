@@ -369,24 +369,29 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     return promise
   }
 
+  let lastReconnectFlushAt = 0
+  const RECONNECT_COOLDOWN_MS = 5000
+
   const unsub = serverSDK.event.listen((e) => {
     const directory = e.name
     const key = directoryKey(directory)
     const event = e.details
     const recent = bootingRoot || Date.now() - bootedAt < 1500
+    const reconnectOnCooldown = Date.now() - lastReconnectFlushAt < RECONNECT_COOLDOWN_MS
 
     if (directory === "global") {
       applyGlobalEvent({
         event,
         project: globalStore.project,
         refresh: () => {
-          if (recent) return
+          if (recent || reconnectOnCooldown) return
           bootstrap.refetch()
         },
         setGlobalProject: setProjects,
       })
       if (event.type === "server.connected" || event.type === "global.disposed") {
-        if (recent) return
+        if (recent || reconnectOnCooldown) return
+        lastReconnectFlushAt = Date.now()
         for (const directory of Object.keys(children.children)) {
           queue.push(directory)
         }
