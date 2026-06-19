@@ -46,4 +46,18 @@ describe("createRefCountMap", () => {
     second()
     expect(removed).toEqual(["C:/repo"])
   })
+
+  test("passes the item to the remove callback", () => {
+    const itemsRemoved: [string, number][] = []
+    const map = createRefCountMap(
+      (key) => ({ key, value: 42 }),
+      (key, item) => itemsRemoved.push([key, item.value]),
+    )
+    const first = createRoot((dispose) => {
+      map("/project")
+      return dispose
+    })
+    first()
+    expect(itemsRemoved).toEqual([["/project", 42]])
+  })
 })

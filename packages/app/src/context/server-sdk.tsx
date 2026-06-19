@@ -290,7 +290,10 @@ export const { use: useServerSDK, provider: ServerSDKProvider } = createSimpleCo
 
     const ctx = global.createServerCtx(conn)
     return Object.assign(ctx.sdk, {
-      createDirSdkContext: createRefCountMap((dir) => createDirSdkContext(dir, ctx.sdk)),
+      createDirSdkContext: createRefCountMap(
+        (dir) => createDirSdkContext(dir, ctx.sdk),
+        (dir, item) => item.dispose(),
+      ),
     })
   },
 })
@@ -310,13 +313,15 @@ function createDirSdkContext(directory: string, serverSDK: ServerSDK) {
   const unsub = serverSDK.event.on(directory, (event) => {
     emitter.emit(event.type, event)
   })
-  onCleanup(unsub)
 
   return {
     scope: serverSDK.scope,
     directory,
     client,
     event: emitter,
+    dispose() {
+      unsub()
+    },
     get url() {
       return serverSDK.url
     },

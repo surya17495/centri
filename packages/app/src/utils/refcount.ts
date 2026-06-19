@@ -2,7 +2,7 @@ import { onCleanup } from "solid-js"
 
 export function createRefCountMap<T>(
   create: (key: string) => T,
-  remove?: (key: string) => void,
+  remove?: (key: string, item: T) => void,
   identity: (key: string) => string = (key) => key,
 ) {
   const items = new Map<string, T>()
@@ -13,7 +13,10 @@ export function createRefCountMap<T>(
     onCleanup(() => {
       refCounts.set(id, (refCounts.get(id) ?? 0) - 1)
       if (refCounts.get(id) === 0) {
-        remove?.(id)
+        const item = items.get(id)
+        if (item !== undefined) {
+          remove?.(id, item)
+        }
         items.delete(id)
         refCounts.delete(id)
       }
