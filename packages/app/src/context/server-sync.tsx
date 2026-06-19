@@ -370,7 +370,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
   }
 
   let lastReconnectFlushAt = 0
-  const RECONNECT_COOLDOWN_MS = 5000
+  const RECONNECT_COOLDOWN_MS = 60000
 
   const unsub = serverSDK.event.listen((e) => {
     const directory = e.name
@@ -378,19 +378,20 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     const event = e.details
     const recent = bootingRoot || Date.now() - bootedAt < 1500
     const reconnectOnCooldown = Date.now() - lastReconnectFlushAt < RECONNECT_COOLDOWN_MS
+    const skipReconnect = bootedAt > 0 && (recent || reconnectOnCooldown)
 
     if (directory === "global") {
       applyGlobalEvent({
         event,
         project: globalStore.project,
         refresh: () => {
-          if (recent || reconnectOnCooldown) return
+          if (skipReconnect) return
           bootstrap.refetch()
         },
         setGlobalProject: setProjects,
       })
       if (event.type === "server.connected" || event.type === "global.disposed") {
-        if (recent || reconnectOnCooldown) return
+        if (skipReconnect) return
         lastReconnectFlushAt = Date.now()
         for (const directory of Object.keys(children.children)) {
           queue.push(directory)
