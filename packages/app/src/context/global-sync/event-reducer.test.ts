@@ -573,4 +573,32 @@ describe("applyDirectoryEvent", () => {
     expect(pushes).toEqual(["/tmp"])
     expect(lspLoads).toBe(1)
   })
+
+  test("handles message part delta updates in a single setStore call", () => {
+    const sessionID = "ses_1"
+    const messageID = "msg_1"
+    const partID = "prt_1"
+    const [store, setStore] = createStore(
+      baseState({
+        part: { [messageID]: [{ id: partID, sessionID, messageID, type: "text", text: "hello" } as Part] },
+      }),
+    )
+
+    applyDirectoryEvent({
+      event: {
+        type: "message.part.delta",
+        properties: { messageID, partID, field: "text", delta: " world" },
+      },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    const updated = store.part[messageID]?.find((x) => x.id === partID)
+    expect(updated?.type).toBe("text")
+    if (updated?.type === "text") expect(updated.text).toBe("hello world")
+    expect(store.part_text_accum_delta[partID]).toBe(" world")
+  })
 })

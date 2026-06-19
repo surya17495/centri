@@ -177,6 +177,10 @@ export function createServerSdkContext(server: ServerConnection.Any, scope: Serv
 
             const k = key(directory, payload)
             if (k) {
+              if (payload.type === "message.part.updated") {
+                const part = payload.properties.part
+                staleDeltas.add(deltaKey(directory, part.messageID, part.id))
+              }
               const i = coalesced.get(k)
               if (i !== undefined) {
                 if (payload.type === "message.part.delta") {
@@ -184,10 +188,6 @@ export function createServerSdkContext(server: ServerConnection.Any, scope: Serv
                   ;(queue[i]!.payload.properties as { delta: string }).delta += props.delta
                 } else {
                   queue[i] = { directory, payload }
-                  if (payload.type === "message.part.updated") {
-                    const part = payload.properties.part
-                    staleDeltas.add(deltaKey(directory, part.messageID, part.id))
-                  }
                 }
                 continue
               }
