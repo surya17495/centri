@@ -260,7 +260,8 @@ class Scheduler:
         threshold = getattr(tier, "_batch_threshold", 16)
         self._llm_idle_ticks += 1
         stale = self._llm_idle_ticks >= self._llm_staleness_ticks
-        if len(self._llm_backlog) < threshold and not stale:
+        # Event-driven: only fire on batch threshold, or on staleness with a minimum backlog
+        if len(self._llm_backlog) < threshold and not (stale and len(self._llm_backlog) >= 8):
             return {"ran": False}
 
         batch = self._llm_backlog
