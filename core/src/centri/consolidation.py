@@ -205,10 +205,20 @@ class Consolidator:
             adopted = [d for d in decisions if d.stance == STANCE_ADOPTED]
             active_projects = sorted({d.repo_id for d in adopted if d.repo_id})[:5]
             top_loops = [loop.intent[:80] for loop in loops][:5]
-            narrative = (
-                f"Recent memory: {len(adopted)} decisions, {len(facts)} facts, "
-                f"{len(loops)} open loops on record."
-            )
+            # Build a rolling current-work summary from the most recent items
+            recent_decisions = sorted(adopted, key=lambda d: d.created_at or "", reverse=True)[:5]
+            narrative_parts = []
+            if recent_decisions:
+                narrative_parts.append("Recently:")
+                for d in recent_decisions:
+                    # Show the topic and first 100 chars of statement
+                    stmt = d.statement[:100].replace("\n", " ")
+                    narrative_parts.append(f"  - {d.topic}: {stmt}")
+            if top_loops:
+                narrative_parts.append("Open work:")
+                for loop in top_loops:
+                    narrative_parts.append(f"  - {loop}")
+            narrative = "\n".join(narrative_parts) if narrative_parts else "No recent activity."
 
             digest = {
                 "identity": conventions,
