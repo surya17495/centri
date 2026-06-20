@@ -60,6 +60,8 @@ class Scheduler:
         self._llm_staleness_ticks = max(1, int(llm_staleness_ticks))
         self._llm_backlog: List[dict] = []
         self._llm_idle_ticks = 0
+        self._llm_consecutive_failures: int = 0
+        self._llm_backoff_ticks: int = 0
         self._task: Optional[asyncio.Task] = None
         self._interval = 30.0
         # Deterministic consolidation can embed one vector per hinted event. Keep
@@ -248,6 +250,9 @@ class Scheduler:
         tier = self._llm_tier
         if tier is None or not getattr(tier, "available", False):
             return {"ran": False}
+        if self._llm_backoff_ticks > 0:
+            self._llm_backoff_ticks -= 1
+            return {"ran": False, "backoff": True}
         if not self._llm_backlog:
             self._llm_idle_ticks = 0
             return {"ran": False}
@@ -262,7 +267,15 @@ class Scheduler:
         self._llm_backlog = []
         self._llm_idle_ticks = 0
         try:
-            return await tier.consume_unhinted(batch, force=True)
+            result = await tier.consume_unhinted(batch, force=True)
+            if result.get("ran"):
+                self._llm_consecutive_failures = 0
+                self._llm_backoff_ticks = 0
+            elif any("llm-call-failed" in str(r) for r in result.get("reasons", [])):
+                self._llm_consecutive_failures += 1
+                backoff = min(2 ** self._llm_consecutive_failures, 16)
+                self._llm_backoff_ticks = backoff
+            return result
         except Exception:
             logger.debug("LLM consolidation pass failed", exc_info=True)
             return {"ran": False}

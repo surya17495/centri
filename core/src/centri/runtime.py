@@ -191,6 +191,7 @@ class Runtime:
             ingestor=self.opencode_ingestor,
             ingest_db_path=settings.opencode_ingest_db,
             llm_tier=self.consolidation_tier,
+            llm_staleness_ticks=settings.llm_staleness_ticks,
         )
 
         # 10. Model router — reuses OpenCode's provider auth as a key fallback.
