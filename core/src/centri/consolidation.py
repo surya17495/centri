@@ -87,6 +87,9 @@ _LLM_TIER_EXCLUDED_TYPES = (
     "ingest.opencode.tool_called",
     "ingest.opencode.transcript",
     "ingest.opencode.session_activity",
+    "centri_app.message.updated",
+    "centri_app.session.updated",
+    "centri_app.session.idle",
 )
 
 # Relative-time words a proposed statement may not contain (absolute-date

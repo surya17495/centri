@@ -1273,7 +1273,7 @@ async def curate(
     ranked = Ranker(weights).rank(cue, candidates)
     lines = Budgeter(budget, counter).select(ranked)
 
-    if not lines and cue.raw:
+    if cue.raw:
         clean_words = []
         for word in cue.raw.split():
             w = word.replace('"', '').replace('*', '').replace(':', '').replace('-', '').replace('+', '').replace('^', '').strip()

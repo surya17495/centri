@@ -221,6 +221,8 @@ class Scheduler:
                     "importance": row.get("importance"),
                     "payload": payload,
                     "_ts": ts,
+                    "ts": ts,
+                    "source": row.get("source"),
                 }
             )
 
