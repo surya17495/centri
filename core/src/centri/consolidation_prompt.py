@@ -117,10 +117,13 @@ def render_batch(events: List[Dict[str, Any]], *, per_event_chars: int = 600) ->
     """
     lines: List[str] = []
     for ev in events:
-        eid = ev.get("id") or ev.get("event_id") or "?"
+        ts = ev.get("ts") or ev.get("timestamp") or "unknown-time"
+        ts_str = str(ts)
+        if len(ts_str) > 19:
+            ts_str = ts_str[:19]
         etype = ev.get("type") or "event"
         text = _event_text(ev.get("payload") or {})
-        lines.append(f"{eid} [{etype}] {_truncate(text, per_event_chars)}")
+        lines.append(f"{ts_str} [{etype}] {_truncate(text, per_event_chars)}")
     return "\n".join(lines) if lines else "(empty batch)"
 
 
@@ -160,13 +163,15 @@ SYSTEM_PROMPT = (
     "- ABSOLUTE DATES ONLY. Never write 'today', 'yesterday', 'recently', 'now'. "
     "If a time matters, use an explicit ISO date (YYYY-MM-DD). A statement with a "
     "relative time word will be REJECTED.\n"
+    "- Each event below shows its actual timestamp. Use that exact date (YYYY-MM-DD) in your statements. Never invent dates.\n"
     "- Dedupe against the CURRENT MEMORY shown below: if a fact already exists, do "
     "not re-add it; supersede it only if the new information actually changes it.\n"
     "- Propose profile updates (op: 'profile_update') when you see user preferences, "
     "work habits, project context, or configurations (e.g. key: 'active_projects', "
     "value: 'futures-agent, dashboard-next').\n"
     "- Every statement must stand on its own without the raw log — self-contained, "
-    "specific, and verifiable.\n\n"
+    "specific, and verifiable.\n"
+    "- NARRATIVE EXTRACTION: When you see a sequence of events that shows a problem being investigated and solved, capture the FULL arc: what was the problem, what was the root cause found, what was the fix applied, and how it was verified. Do not extract isolated facts from individual events — connect related events into a coherent narrative statement. For example, instead of extracting a fact from each tool result, combine the pattern: User reported X → root cause was Y → fix was Z (commit SHA) → verified by W.\n\n"
     "Allowed operations (emit a JSON array of these objects, nothing else):\n"
     '  {"op":"add_fact","topic":str,"statement":str,"tags"?:[str]}\n'
     '  {"op":"add_decision","topic":str,"statement":str,"stance"?:"adopted"|"rejected","rationale"?:str}\n'

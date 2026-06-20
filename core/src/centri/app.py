@@ -343,6 +343,7 @@ _KIND_OF_SECTION = {
     "rejections": "decision",
     "conventions": "convention",
     "open_loops": "open_loop",
+    "photographic_recall": "photographic_recall",
 }
 
 

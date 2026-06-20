@@ -36,9 +36,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+logger = logging.getLogger(__name__)
 
 from centri.memory_graph import (
     LOOP_OPEN,
@@ -809,7 +812,7 @@ def _recency_score(created_at: str) -> float:
 class BriefLine:
     """One rendered line with its receipt + score breakdown (explainability)."""
 
-    section: str          # decisions | rejections | conventions | open_loops
+    section: str          # decisions | rejections | conventions | open_loops | photographic_recall
     text: str             # the rendered, human-facing line (no receipt inline)
     detail: str           # "full" | "digest"
     score: float
@@ -881,12 +884,13 @@ class Budgeter:
         return lines
 
 
-_SECTION_ORDER = ["decisions", "rejections", "conventions", "open_loops"]
+_SECTION_ORDER = ["decisions", "rejections", "conventions", "open_loops", "photographic_recall"]
 _SECTION_TITLES = {
     "decisions": "Decisions already made (do not relitigate):",
     "rejections": "Approaches already REJECTED (do not re-propose without stating what changed):",
     "conventions": "Project conventions / current facts:",
     "open_loops": "Open loops / alternatives still on the table:",
+    "photographic_recall": "Photographic recall (found in raw event history):",
 }
 
 
@@ -1268,6 +1272,77 @@ async def curate(
     candidates = await gather_candidates(graph, cue, repo_id)
     ranked = Ranker(weights).rank(cue, candidates)
     lines = Budgeter(budget, counter).select(ranked)
+
+    if not lines and cue.raw:
+        clean_words = []
+        for word in cue.raw.split():
+            w = word.replace('"', '').replace('*', '').replace(':', '').replace('-', '').replace('+', '').replace('^', '').strip()
+            if w:
+                clean_words.append(f'"{w}"')
+        fts_query = " OR ".join(clean_words)
+        if fts_query:
+            raw_events = []
+            try:
+                cur = await graph._db._execute(
+                    """
+                    SELECT events.id, events.type, events.source, events.ts, events.payload_json
+                    FROM event_fts
+                    JOIN events ON events.rowid = event_fts.rowid
+                    WHERE event_fts MATCH ?
+                      AND events.source NOT LIKE 'consolidation%'
+                      AND events.source NOT LIKE 'memory%'
+                    ORDER BY bm25(event_fts) ASC
+                    LIMIT 5
+                    """,
+                    (fts_query,),
+                )
+                raw_events = [dict(row) for row in cur.fetchall()]
+            except Exception as e:
+                logger.warning("FTS recall fallback failed, trying LIKE query: %s", e)
+                try:
+                    cur = await graph._db._execute(
+                        """
+                        SELECT id, type, source, ts, payload_json
+                        FROM events
+                        WHERE payload_json LIKE ?
+                          AND source NOT LIKE 'consolidation%'
+                          AND source NOT LIKE 'memory%'
+                        LIMIT 5
+                        """,
+                        (f"%{cue.raw}%",),
+                    )
+                    raw_events = [dict(row) for row in cur.fetchall()]
+                except Exception as e2:
+                    logger.error("LIKE fallback also failed: %s", e2)
+            
+            for ev in raw_events:
+                payload_str = ev.get("payload_json", "{}")
+                try:
+                    payload = json.loads(payload_str)
+                except Exception:
+                    payload = {}
+                
+                text_val = ""
+                for key in ("text", "content", "message", "stdout", "output", "summary", "line"):
+                    val = payload.get(key)
+                    if isinstance(val, str) and val.strip():
+                        text_val = val.strip()
+                        break
+                if not text_val:
+                    text_val = json.dumps(payload)
+                
+                lines.append(
+                    BriefLine(
+                        section="photographic_recall",
+                        text=text_val,
+                        detail="full",
+                        score=1.0,
+                        breakdown={"fts_score": 1.0},
+                        source_event_id=ev.get("id"),
+                        key=f"photo-{ev.get('id')}",
+                    )
+                )
+
     hw = await graph_high_water(graph)
 
     verbatim = []
