@@ -1403,6 +1403,163 @@ async def curate(
 
 
 # ---------------------------------------------------------------------------
+# Verbatim recall as a first-class turn capability (master plan §2.10)
+# ---------------------------------------------------------------------------
+@dataclass
+class VerbatimRecall:
+    """One exact, receipted recall of an original utterance from the spine.
+
+    Unlike the passive ``VerbatimMatch`` folded into a brief, this is the result
+    a TURN gets when it calls :func:`recall_verbatim` on demand. ``text`` is the
+    original wording byte-for-byte (never paraphrased/distilled); ``source_event_id``
+    is the receipt that resolves to the originating spine event; ``thread_id`` is
+    the session that event belongs to (so a cross-session recall is provable).
+    """
+
+    text: str
+    source_event_id: str
+    type: str
+    source: str
+    thread_id: Optional[str] = None
+
+
+def _verbatim_fts_query(query: str) -> str:
+    """Build an OR-of-quoted-terms FTS5 query, stripping operator characters.
+
+    Mirrors the cleaning ``curate()`` applies before ``search_events`` so a raw
+    user query can never inject FTS5 syntax (which would raise and silently drop
+    recall). An empty result means there were no usable terms.
+    """
+    clean_words = []
+    for word in (query or "").split():
+        w = word.replace('"', "").replace("*", "").replace(":", "").replace("-", "")
+        w = w.replace("+", "").replace("^", "").strip()
+        if w:
+            clean_words.append(f'"{w}"')
+    return " OR ".join(clean_words)
+
+
+async def recall_verbatim(
+    db: Any,
+    query: str,
+    *,
+    scope: str = "global",
+    limit: int = 5,
+    exclude_thread_id: Optional[str] = None,
+) -> List[VerbatimRecall]:
+    """On-demand exact recall of original utterances over the lossless spine.
+
+    This is the capability distillation-only incumbents structurally cannot offer
+    (master plan §2.10): the verbatim original is always present in the spine, so
+    exact recall is always *possible*. Reuses the existing FTS5 plumbing
+    (:meth:`Database.search_events`) and the same source-priority sort + legacy
+    filtering + dedup that ``curate()`` applies to its passive verbatim section —
+    no duplicate storage, no second index.
+
+    ``scope='global'`` searches the whole spine (memory is global; a session is a
+    view). ``exclude_thread_id`` drops matches from the calling session so a turn
+    pages in the OTHER sessions' originals, not its own already-in-context text.
+
+    Honest degradation (master plan §2.13): if the FTS5 query errors, fall back to
+    a LIKE scan; if that also fails, return ``[]`` (an honest empty result, never a
+    fabricated answer). The caller emits the auditable ``recall.verbatim`` event.
+    """
+    fts_query = _verbatim_fts_query(query)
+    if not fts_query:
+        return []
+
+    rows: List[Dict[str, Any]] = []
+    try:
+        rows = await db.search_events(fts_query, limit=max(limit * 3, limit))
+    except Exception:
+        logger.debug("recall_verbatim FTS search failed; trying LIKE fallback", exc_info=True)
+        rows = await _recall_verbatim_like(db, query, limit=max(limit * 3, limit))
+
+    matches: List[VerbatimRecall] = []
+    for r in rows:
+        thread_id = r.get("thread_id")
+        if exclude_thread_id and thread_id == exclude_thread_id:
+            continue
+        text = r.get("text") or ""
+        source = r.get("source") or ""
+        # Same obsolete-history filtering curate() applies: never surface a legacy
+        # system's text as a current verbatim recall.
+        if _is_legacy_source(source) or _text_mentions_legacy(text):
+            continue
+        matches.append(
+            VerbatimRecall(
+                text=text,
+                source_event_id=r.get("event_id") or r.get("id") or "",
+                type=r.get("type") or "",
+                source=source,
+                thread_id=thread_id,
+            )
+        )
+
+    # Dedup by first 200 chars (the same text appears under several event types).
+    seen: set = set()
+    deduped: List[VerbatimRecall] = []
+    for m in matches:
+        key = hash(m.text[:200])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(m)
+
+    # Source-priority sort: user utterances rank above assistant, above tool/system.
+    deduped.sort(key=lambda m: _verbatim_source_priority(m.source))
+    return deduped[:limit]
+
+
+async def _recall_verbatim_like(db: Any, query: str, *, limit: int) -> List[Dict[str, Any]]:
+    """LIKE-scan fallback when FTS5 is unavailable (honest degradation, §2.13).
+
+    Returns rows shaped like :meth:`Database.search_events` output so the caller is
+    agnostic to which path produced them. Excludes the memory system's own events
+    (``consolidation.*`` / ``memory.*``) exactly as the FTS path does.
+    """
+    terms = [w for w in (query or "").split() if w.strip()]
+    if not terms:
+        return []
+    likes = " OR ".join("events.payload_json LIKE ?" for _ in terms)
+    params = [f"%{t}%" for t in terms]
+    try:
+        cur = await db._execute(  # noqa: SLF001 — fallback path needs a raw scan
+            f"""
+            SELECT events.id AS event_id, events.type, events.source, events.thread_id,
+                   events.payload_json
+            FROM events
+            WHERE ({likes})
+              AND events.importance IN ('normal','high')
+              AND events.source NOT LIKE 'consolidation%'
+              AND events.source NOT LIKE 'memory%'
+            ORDER BY events.ts DESC
+            LIMIT ?
+            """,
+            (*params, limit),
+        )
+    except Exception:
+        logger.debug("recall_verbatim LIKE fallback failed", exc_info=True)
+        return []
+    out: List[Dict[str, Any]] = []
+    for row in cur.fetchall():
+        d = dict(row)
+        try:
+            payload = json.loads(d.get("payload_json") or "{}")
+        except Exception:
+            payload = {}
+        text = ""
+        for key in ("text", "content", "statement", "intent", "description", "message"):
+            val = payload.get(key)
+            if isinstance(val, str) and val.strip():
+                text = val
+                break
+        d["text"] = text
+        out.append(d)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Optional cue-expansion seam (honest-unavailable)
 # ---------------------------------------------------------------------------
 class CueExpander:

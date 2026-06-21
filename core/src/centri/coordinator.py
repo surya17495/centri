@@ -182,6 +182,55 @@ class Coordinator:
         await self._record_event("narrate", source="coordinator", payload={"text": message})
 
     # ------------------------------------------------------------------
+    # Verbatim recall as a first-class turn capability (master plan §2.10)
+    # ------------------------------------------------------------------
+    async def recall_verbatim(
+        self,
+        query: str,
+        *,
+        scope: str = "global",
+        limit: int = 5,
+        exclude_thread_id: Optional[str] = None,
+    ):
+        """Page in the EXACT original wording a user said, on demand, cross-session.
+
+        The differentiator distillation-only incumbents structurally cannot match:
+        the verbatim spine is lossless, so the exact sentence said in another
+        session is always recallable byte-for-byte with a ``source_event_id``
+        receipt. Reuses the existing FTS5 plumbing (no duplicate store) via
+        :func:`centri.curation.recall_verbatim`.
+
+        ``scope='global'`` (the default) crosses session boundaries — memory is
+        global; a thread/session is only a view. ``exclude_thread_id`` drops the
+        calling session's own already-in-context utterances.
+
+        The page-in is itself auditable: a ``recall.verbatim`` event is recorded on
+        the spine and published, carrying the query, scope, match count, and the
+        matches' receipts. On no match the result is an honest empty list (never a
+        fabricated answer) and the event still records ``match_count: 0``.
+        """
+        from centri.curation import recall_verbatim as _recall
+
+        matches = await _recall(
+            self._db,
+            query,
+            scope=scope,
+            limit=limit,
+            exclude_thread_id=exclude_thread_id,
+        )
+        await self._record_event(
+            "recall.verbatim",
+            source="coordinator",
+            payload={
+                "query": query,
+                "scope": scope,
+                "match_count": len(matches),
+                "source_event_ids": [m.source_event_id for m in matches],
+            },
+        )
+        return matches
+
+    # ------------------------------------------------------------------
     # Session-start push briefing (Increment 2)
     # ------------------------------------------------------------------
     async def emit_session_brief(self, repo_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
