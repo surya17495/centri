@@ -28,13 +28,21 @@ jobs:
 
             // Check if author is a team member or bot
             if (login === 'opencode-agent[bot]') return;
-            const { data: file } = await github.rest.repos.getContent({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              path: '.github/TEAM_MEMBERS',
-              ref: 'dev'
-            });
-            const members = Buffer.from(file.content, 'base64').toString().split('\n').map(l => l.trim()).filter(Boolean);
+            // Read the team list from the repo default branch. A missing file or
+            // branch must not crash the check (this fork has no `dev` branch), so
+            // treat any lookup failure as "not a team member" and continue.
+            let members = [];
+            try {
+              const { data: file } = await github.rest.repos.getContent({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path: '.github/TEAM_MEMBERS',
+                ref: context.payload.repository.default_branch
+              });
+              members = Buffer.from(file.content, 'base64').toString().split('\n').map(l => l.trim()).filter(Boolean);
+            } catch (e) {
+              console.log(`Could not read .github/TEAM_MEMBERS (${e.status || e.message}); treating ${login} as non-team-member`);
+            }
             if (members.includes(login)) {
               console.log(`Skipping: ${login} is a team member`);
               return;
@@ -175,13 +183,21 @@ jobs:
 
             // Check if author is a team member or bot
             if (login === 'opencode-agent[bot]') return;
-            const { data: file } = await github.rest.repos.getContent({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              path: '.github/TEAM_MEMBERS',
-              ref: 'dev'
-            });
-            const members = Buffer.from(file.content, 'base64').toString().split('\n').map(l => l.trim()).filter(Boolean);
+            // Read the team list from the repo default branch. A missing file or
+            // branch must not crash the check (this fork has no `dev` branch), so
+            // treat any lookup failure as "not a team member" and continue.
+            let members = [];
+            try {
+              const { data: file } = await github.rest.repos.getContent({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path: '.github/TEAM_MEMBERS',
+                ref: context.payload.repository.default_branch
+              });
+              members = Buffer.from(file.content, 'base64').toString().split('\n').map(l => l.trim()).filter(Boolean);
+            } catch (e) {
+              console.log(`Could not read .github/TEAM_MEMBERS (${e.status || e.message}); treating ${login} as non-team-member`);
+            }
             if (members.includes(login)) {
               console.log(`Skipping: ${login} is a team member`);
               return;

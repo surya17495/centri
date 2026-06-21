@@ -43,12 +43,16 @@ is preserved in [`LICENSE-OPENCODE`](LICENSE-OPENCODE),
 
 ## Key features
 
-- **Append-only event spine** — every tool call, file edit, decision, and result
-  is durably logged with secret redaction on write. The spine is the system's
-  source of truth.
-- **Typed memory graph with bi-temporal supersession** — decisions, facts, and
-  open loops. New truth invalidates old truth, but history is retained: stale
-  facts never resurface in a brief, while the full timeline stays auditable.
+- **One global, lossless event spine** — every tool call, file edit, decision,
+  and result is durably appended (with secret redaction on write) and never
+  mutated or deleted. Nothing is summarized away at write time, so the original
+  wording is always recoverable. There is exactly one spine for the whole agent:
+  sessions and threads are *views* over it, and parallel tasks/spawns are
+  additional *producers* into it, so concurrent work never fragments memory.
+- **Typed memory graph with bi-temporal supersession** — decisions, facts, open
+  loops, identity, user profile, and concepts. New truth invalidates old truth,
+  but history is retained: stale facts never resurface in a brief, while the full
+  timeline stays auditable.
 - **Deterministic curation with receipts** — each per-turn brief is rendered by
   one pure `curate()` path; every line carries a `source_event_id` pointing back
   to the ledger event it came from. The same `(graph, cue, budget, policy)`
@@ -69,6 +73,11 @@ is preserved in [`LICENSE-OPENCODE`](LICENSE-OPENCODE),
   produced it. Refreshed by the consolidation worker as work lands.
 - **Temporal recall** — ask "what changed since yesterday" or "where did we leave
   off" and get an answer grounded in the ledger's timeline, not a guess.
+- **Skills / procedural memory** — beyond *what* happened (episodic) and *what is
+  true* (semantic), the core keeps a procedural store of *how to do things*:
+  reusable procedures learned from successful runs are recorded as
+  `procedural.memory` events and paged back in on relevant turns. This is the
+  seam for first-class skills; richer authoring and surfacing is on the roadmap.
 - **Tools / limbs over ACP** — work is handed to a coding agent (Agent Client
   Protocol, JSON-RPC over stdio) and to a first-class tool contract, with live
   streaming progress, an approval gate for destructive actions, and failover to a
@@ -83,6 +92,12 @@ is preserved in [`LICENSE-OPENCODE`](LICENSE-OPENCODE),
 - **Hermes structured ingestion** — Hermes chat is ingested as typed, dedupable
   envelopes (`hermes.user.message`, `hermes.assistant.message`,
   `hermes.tool.result`, `hermes.memory.write`), not flattened text.
+- **Two-tier, role-based model support** — BYOK and model-agnostic via an
+  OpenAI-compatible gateway. Cheap/fast roles (intent, fast reply, narration)
+  and a heavier reasoning tier are configured independently per task
+  (`MODEL_INTENT`, `MODEL_FAST_REPLY`, `MODEL_REASONING`, …), and a separate
+  optional LLM consolidation tier runs offline behind the deterministic memory
+  path. The orchestrator selects the role model; nothing is hardcoded.
 
 ## Architecture
 
@@ -264,10 +279,13 @@ server are environment-gated and skip cleanly when those are absent. The OpenCod
 fork web app builds and typechecks.
 
 **Planned** — a browser/automation limb (Playwright); richer parallel-task /
-spawn orchestration surfaced in the UI; an optional LLM digest summarizer behind
-the existing deterministic standing-self seam; and broader tool coverage. The
-roadmap lives in [`docs/ROADMAP.md`](docs/ROADMAP.md); the full docs index is
-[`docs/README.md`](docs/README.md).
+spawn orchestration surfaced in the UI; a dedicated **memory view** in the web UI
+(inspect the standing-self digest, the typed graph, and verbatim recall with their
+receipts, so memory is legible and auditable from the client, not just the API);
+first-class **skill authoring** over the procedural-memory seam; an optional LLM
+digest summarizer behind the existing deterministic standing-self seam; and
+broader tool coverage. The roadmap lives in [`docs/ROADMAP.md`](docs/ROADMAP.md);
+the full docs index is [`docs/README.md`](docs/README.md).
 
 **Build discipline** — increments are shipped small and end-to-end: build →
 test → fix → push, never a skeleton. Every merged increment is expected to look
