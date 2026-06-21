@@ -1,15 +1,28 @@
 # Centri
 
-**A memory-first coding agent. One durable memory spine remembers everything you
-and your tools have done, so every new turn starts warm instead of cold.**
+**A memory-native personal agent. One durable, global memory remembers
+everything you and your tools have ever done, so every turn — and every parallel
+task — starts warm instead of cold.**
 
-Agents forget. Context windows fill, sessions end, and every new chat starts
-from scratch — so you re-explain decisions you already made and watch the agent
-re-propose approaches you already rejected. Centri inverts this: an append-only
-**event spine** is the source of truth, **memory is a derived index** that can be
-thrown away and re-derived, and every per-turn context is **assembled fresh** by a
-deterministic curation function that attaches a receipt to every line. The
-context window is a cache, not storage.
+The goal is a Jarvis-style personal agent: one that knows you, carries context
+across days and sessions, and acts through real tools. The binding constraint
+today is the context window of current LLMs, not the ambition. Centri's answer is
+to treat memory, not the context window, as the system of record: an append-only
+**event spine** is the single global source of truth, **memory is a derived index**
+that can be thrown away and re-derived, and every per-turn context is **assembled
+fresh** by a deterministic curation function that attaches a receipt to every
+line. The context window is a cache, not storage.
+
+Memory is **global**: a session or thread is a *view* over the one memory, not a
+boundary. Work done in one session is visible from another (cross-session
+continuity), and the standing picture of "what's going on" updates as work
+progresses, not just at session start (mid-session continuity). Parallel
+tasks/spawns are *producers* of events into the same global spine, so several
+threads of work can run without fragmenting memory.
+
+Centri began as, and still ships with, a memory-first **coding** agent (an
+OpenCode fork); the architecture is general-purpose and the coding loop is its
+first fully-wired set of "limbs."
 
 ## What's in this repo
 
@@ -40,17 +53,27 @@ is preserved in [`LICENSE-OPENCODE`](LICENSE-OPENCODE),
   one pure `curate()` path; every line carries a `source_event_id` pointing back
   to the ledger event it came from. The same `(graph, cue, budget, policy)`
   yields a byte-identical brief. No LLM runs at read time.
-- **FTS5 verbatim recall** — a SQLite FTS5 index over the spine lets a brief lift
-  exact prior tokens (file names, error strings, identifiers) into context
-  alongside the typed graph.
-- **LLM consolidation** — an offline worker folds the raw spine into the ambient
-  layer: identity, active projects, top open loops, a short recent narrative, and
-  a **user profile** of preferences and conventions the agent has seen you repeat.
+- **Verbatim recall with receipts** — a first-class turn capability: from any
+  session, recall the *exact* original wording a user said earlier (byte-equal,
+  not paraphrased or distilled), backed by a `source_event_id` receipt that
+  resolves to the originating spine event. Built on a SQLite FTS5 index over the
+  spine; the page-in is itself auditable (a `recall.verbatim` event). On no match
+  the result is an honest empty, never a fabricated answer. This is the
+  differentiator distillation-only memory systems structurally cannot offer.
+- **Receipt-backed global standing-self** — a small, slow-changing *ambient
+  digest* (identity, active projects, top open loops, a short rolling
+  current-work narrative, and a **user profile** of conventions you repeat) is
+  derived from the live graph with no thread filter, so it reflects every
+  session and producer. It carries `source_event_id` and a bounded `derived_from`
+  receipt list, so the standing picture is auditable back to the events that
+  produced it. Refreshed by the consolidation worker as work lands.
 - **Temporal recall** — ask "what changed since yesterday" or "where did we leave
   off" and get an answer grounded in the ledger's timeline, not a guess.
-- **Coding delegation over ACP** — work is handed to a coding agent (Agent Client
-  Protocol, JSON-RPC over stdio) with live streaming progress, an approval gate
-  for destructive actions, and failover to a fallback hand.
+- **Tools / limbs over ACP** — work is handed to a coding agent (Agent Client
+  Protocol, JSON-RPC over stdio) and to a first-class tool contract, with live
+  streaming progress, an approval gate for destructive actions, and failover to a
+  fallback hand. Coding (via the OpenCode fork) is the first fully-wired limb;
+  a browser/automation limb (Playwright) is on the roadmap.
 - **First-class tool contract** — tools (Composio, e.g. Tavily search) sit beside
   the coding hands. Every invocation is event-ledgered, side-effectful tools pass
   through the approval gate, read-only results fold back into memory.
@@ -69,10 +92,12 @@ Events are the source of truth; memory is a derived, re-derivable index over the
 |--------------|-------------------------------------------------------------------------------------|
 | Web UI       | OpenCode fork web app — activity timeline, task cards, approvals. |
 | Coordinator  | Python core loop: understand → decide → act → narrate → remember                    |
-| Event spine  | Append-only SQLite ledger + in-memory bus, with secret redaction on write           |
-| Memory       | Typed decisions/facts/open-loops with bi-temporal supersession, derived from the spine |
-| Hands        | Capability router over coding agents — real ACP client, OpenCode fallback           |
+| Event spine  | Append-only SQLite ledger + in-memory bus, with secret redaction on write. One global truth; threads/sessions are views, spawns are producers. |
+| Memory       | Typed graph — decisions, facts, open loops, identity/profile, concepts — with bi-temporal supersession, derived from the spine |
+| Standing-self | Receipt-backed ambient digest derived globally from the graph; verbatim recall lifts exact prior wording on demand. Rehydrated before turns. |
+| Hands / limbs | Capability router over coding agents — real ACP client, OpenCode fallback (browser/Playwright limb planned) |
 | Tools        | `ToolProvider` contract with Composio; event-ledgered, approval-gated invocation    |
+| Models       | Two-tier, BYOK, model-agnostic via an OpenAI-compatible gateway; role models set per task |
 
 See [`docs/README.md`](docs/README.md) for the full index, or
 [`docs/architecture.md`](docs/architecture.md),
@@ -225,15 +250,29 @@ Methodology: [`docs/centri-bench.md`](docs/centri-bench.md); raw results:
 
 ## Status
 
-The core, memory graph, curation, ACP coding loop, tool contract, and history
-ingest are covered by a 385-test suite (`cd core && python -m pytest tests/`).
-The unit suite runs green offline; integration tests that need a live core, BYOK
-model keys, the `opencode` binary, or a real Letta server are environment-gated
-and skip cleanly when those are absent.
+**Implemented today** — the global event spine; the typed memory graph
+(decisions, facts, open loops, identity/profile) with bi-temporal supersession;
+deterministic curation with per-line receipts; verbatim recall with
+`source_event_id` receipts; the receipt-backed global standing-self/ambient
+digest with cross-session and mid-session continuity; temporal recall; the ACP
+coding loop with approval gating and fallback; the Composio tool contract; and
+history ingest (OpenCode, Claude Code, Cursor) plus Hermes structured ingestion.
+These are covered by a green core suite (`cd core && python -m pytest`, 412
+passing at the time of writing). The unit suite runs offline; integration tests
+that need a live core, BYOK model keys, the `opencode` binary, or a real Letta
+server are environment-gated and skip cleanly when those are absent. The OpenCode
+fork web app builds and typechecks.
 
-The OpenCode fork web app builds and typechecks. The roadmap lives in
-[`docs/ROADMAP.md`](docs/ROADMAP.md); the full docs index is
+**Planned** — a browser/automation limb (Playwright); richer parallel-task /
+spawn orchestration surfaced in the UI; an optional LLM digest summarizer behind
+the existing deterministic standing-self seam; and broader tool coverage. The
+roadmap lives in [`docs/ROADMAP.md`](docs/ROADMAP.md); the full docs index is
 [`docs/README.md`](docs/README.md).
+
+**Build discipline** — increments are shipped small and end-to-end: build →
+test → fix → push, never a skeleton. Every merged increment is expected to look
+finished and work, with tests proving the behavior and receipts proving it is not
+fabricated.
 
 ## License
 
