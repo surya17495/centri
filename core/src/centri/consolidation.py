@@ -67,6 +67,27 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _relative_label(generated_at: str, latest_event_at: str) -> str:
+    """Small deterministic time label for the continuity capsule.
+
+    The capsule should make the orchestrator feel aware of shared time without
+    storing brittle freeform prose. The exact timestamps remain the source of
+    truth; this label is only a compact affordance for prompt/render consumers.
+    """
+    if not latest_event_at:
+        return "no prior work"
+    try:
+        generated = datetime.fromisoformat(generated_at)
+        latest = datetime.fromisoformat(latest_event_at)
+    except (TypeError, ValueError):
+        return "previous work"
+    if generated.date() == latest.date():
+        return "earlier today"
+    if (generated.date() - latest.date()).days == 1:
+        return "yesterday"
+    return "previous work"
+
+
 # Event families the worker inspects. Synthesis hints live in ``payload`` under
 # these keys; an event may carry several at once (e.g. a task.completed that both
 # records a decision and closes an open loop).
@@ -245,6 +266,39 @@ class Consolidator:
                     derived_from.append(eid)
             derived_from = derived_from[:10]
             headline_receipt = derived_from[0] if derived_from else None
+            generated_at = _now()
+            latest_event_at = derivation[0][0] if derivation else ""
+
+            last_decision: Dict[str, Any] = {}
+            if recent_decisions:
+                d = recent_decisions[0]
+                last_decision = {
+                    "topic": d.topic,
+                    "statement": d.statement,
+                    "source_event_id": d.source_event_id,
+                    "created_at": d.created_at,
+                }
+
+            continuity_open_loops = [
+                {
+                    "intent": loop.intent,
+                    "source_event_id": loop.source_event_id,
+                    "created_at": loop.created_at,
+                }
+                for loop in loops[:3]
+            ]
+            continuity_capsule = {
+                "current_time_context": {
+                    "generated_at": generated_at,
+                    "latest_event_at": latest_event_at,
+                    "relative_label": _relative_label(generated_at, latest_event_at),
+                },
+                "active_shared_work": narrative,
+                "last_decision": last_decision,
+                "open_loops": continuity_open_loops,
+                "source_event_ids": derived_from,
+                "suggested_next_action": continuity_open_loops[0]["intent"] if continuity_open_loops else "",
+            }
 
             digest = {
                 "identity": conventions,
@@ -252,7 +306,8 @@ class Consolidator:
                 "open_loops": top_loops,
                 "narrative": narrative,
                 "derived_from": derived_from,
-                "derived_at": _now(),
+                "derived_at": generated_at,
+                "continuity_capsule": continuity_capsule,
             }
             ambient = Fact(
                 id="ambient-standing-context",

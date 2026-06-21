@@ -1017,6 +1017,7 @@ class Ambient:
     active_projects: List[str] = field(default_factory=list)
     open_loops: List[str] = field(default_factory=list)
     narrative: str = ""
+    continuity_capsule: Dict[str, Any] = field(default_factory=dict)
     # Receipt to the most recent spine event the digest was derived from, plus a
     # bounded list of the source events it summarized — so the standing self is
     # auditable back to the verbatim events that produced it (master plan §2.8).
@@ -1025,7 +1026,14 @@ class Ambient:
     derived_at: str = ""
 
     def is_empty(self) -> bool:
-        return not (self.user_profile or self.identity or self.active_projects or self.open_loops or self.narrative)
+        return not (
+            self.user_profile
+            or self.identity
+            or self.active_projects
+            or self.open_loops
+            or self.narrative
+            or self.continuity_capsule
+        )
 
     def render(self, budget: int, counter: Optional[TokenCounter] = None,
                cue_terms: Optional[set] = None) -> str:
@@ -1039,6 +1047,8 @@ class Ambient:
             lines.append("Who/conventions: " + "; ".join(self.identity))
         if self.active_projects:
             lines.append("Active: " + "; ".join(self.active_projects))
+        if self.narrative:
+            lines.append("Current work: " + self.narrative)
         if self.open_loops:
             ranked = list(self.open_loops)
             if cue_terms:
@@ -1048,6 +1058,23 @@ class Ambient:
                 )
             top = ranked[:3]
             lines.append("Top open loops: " + "; ".join(top))
+        capsule = self.continuity_capsule or {}
+        if capsule:
+            continuity_parts = []
+            time_ctx = capsule.get("current_time_context") or {}
+            relative = time_ctx.get("relative_label")
+            if relative:
+                continuity_parts.append(f"time={relative}")
+            last_decision = capsule.get("last_decision") or {}
+            if last_decision.get("topic") and last_decision.get("statement"):
+                continuity_parts.append(
+                    f"last decision={last_decision['topic']}: {last_decision['statement']}"
+                )
+            suggested_next = capsule.get("suggested_next_action")
+            if suggested_next:
+                continuity_parts.append(f"next={suggested_next}")
+            if continuity_parts:
+                lines.append("Continuity: " + "; ".join(continuity_parts))
         block = "\n".join(lines)
         # Trim to budget deterministically: drop whole words from the end until
         # the real token count fits. Word boundaries keep the trim readable while
@@ -1080,6 +1107,7 @@ async def load_ambient(graph: MemoryGraph, repo_id: Optional[str] = None) -> Amb
                 active_projects=list(data.get("active_projects") or []),
                 open_loops=list(data.get("open_loops") or []),
                 narrative=str(data.get("narrative") or ""),
+                continuity_capsule=dict(data.get("continuity_capsule") or {}),
                 source_event_id=f.source_event_id,
                 derived_from=list(data.get("derived_from") or []),
                 derived_at=str(data.get("derived_at") or ""),
@@ -1110,6 +1138,7 @@ def _suppress_ambient_legacy(ambient: Ambient) -> Ambient:
         active_projects=list(ambient.active_projects),
         open_loops=[s for s in ambient.open_loops if not _text_mentions_legacy(s)],
         narrative=ambient.narrative if not _text_mentions_legacy(ambient.narrative) else "",
+        continuity_capsule=dict(ambient.continuity_capsule),
         source_event_id=ambient.source_event_id,
         derived_from=list(ambient.derived_from),
         derived_at=ambient.derived_at,
@@ -1685,6 +1714,7 @@ def curation_breakdown_payload(brief: CuratedBrief) -> Dict[str, Any]:
         "ambient_source_event_id": brief.ambient.source_event_id,
         "ambient_derived_from": list(brief.ambient.derived_from),
         "ambient_derived_at": brief.ambient.derived_at,
+        "ambient_continuity_capsule": dict(brief.ambient.continuity_capsule),
     }
 
 

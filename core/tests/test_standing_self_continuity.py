@@ -64,6 +64,18 @@ def _decision_event(eid, topic, statement, *, thread_id=None, task_id=None):
     }
 
 
+def _open_loop_event(eid, intent, *, thread_id=None, task_id=None):
+    return {
+        "id": eid,
+        "type": "task.started",
+        "thread_id": thread_id,
+        "task_id": task_id,
+        "payload": {
+            "open_loop": {"intent": intent, "cue": intent},
+        },
+    }
+
+
 @pytest.mark.asyncio
 async def test_ambient_is_receipt_backed(setup):
     """The derived standing self carries a receipt to the spine event it summarizes."""
@@ -193,3 +205,48 @@ async def test_receipts_resolve_to_real_spine_events(setup):
     assert all(r in fed for r in ambient.derived_from)
     # The headline receipt is one of the real inputs.
     assert ambient.source_event_id in fed
+
+
+@pytest.mark.asyncio
+async def test_continuity_capsule_tracks_time_shared_work_and_open_loop_receipts(setup):
+    """The standing self carries an explicit continuity capsule for the orchestrator.
+
+    This is the "don't feel fresh" contract: the runtime ambient layer should
+    know what shared work is active, when it was derived, what the latest
+    decision was, and which open loops/receipts it came from.
+    """
+    worker, graph, _ = setup
+    await worker.consume_events([
+        _decision_event(
+            "evt-decision",
+            "standing self",
+            "make continuity a deterministic ambient capsule",
+            thread_id="thread-A",
+        ),
+        _open_loop_event(
+            "evt-loop",
+            "push the continuity capsule increment to dev",
+            thread_id="thread-A",
+            task_id="task-parallel-1",
+        ),
+    ])
+
+    ambient = await load_ambient(graph)
+    capsule = ambient.continuity_capsule
+
+    assert capsule["active_shared_work"] == ambient.narrative
+    assert capsule["last_decision"]["topic"] == "standing self"
+    assert capsule["last_decision"]["source_event_id"] == "evt-decision"
+    assert capsule["open_loops"][0]["intent"] == "push the continuity capsule increment to dev"
+    assert capsule["open_loops"][0]["source_event_id"] == "evt-loop"
+    assert set(capsule["source_event_ids"]) == {"evt-decision", "evt-loop"}
+    assert capsule["current_time_context"]["generated_at"] == ambient.derived_at
+    assert capsule["current_time_context"]["relative_label"] in {
+        "earlier today",
+        "yesterday",
+        "previous work",
+    }
+    rendered = ambient.render(budget=280)
+    assert "Current work:" in rendered
+    assert "Continuity:" in rendered
+    assert "last decision=standing self" in rendered

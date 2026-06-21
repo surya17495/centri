@@ -108,6 +108,29 @@ async def _seed(g: MemoryGraph) -> None:
             "active_projects": ["centri"],
             "open_loops": ["wire standing-self receipts into runtime hydration"],
             "narrative": "Current work is Centri continuity.",
+            "continuity_capsule": {
+                "current_time_context": {
+                    "generated_at": "2026-06-21T03:30:00+00:00",
+                    "latest_event_at": "2026-01-03T00:00:00+00:00",
+                    "relative_label": "previous work",
+                },
+                "active_shared_work": "Current work is Centri continuity.",
+                "last_decision": {
+                    "topic": "jwt refresh",
+                    "statement": "adopt rotating refresh tokens",
+                    "source_event_id": "evt-d1",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                },
+                "open_loops": [
+                    {
+                        "intent": "wire standing-self receipts into runtime hydration",
+                        "source_event_id": "evt-f1",
+                        "created_at": "2026-01-03T00:00:00+00:00",
+                    },
+                ],
+                "source_event_ids": ["evt-d1", "evt-f1"],
+                "suggested_next_action": "wire standing-self receipts into runtime hydration",
+            },
             "derived_from": ["evt-d1", "evt-f1"],
             "derived_at": "2026-06-21T03:30:00+00:00",
         }),
@@ -240,6 +263,13 @@ class TestCurationParity:
             assert payload["ambient_source_event_id"] == "evt-ambient-highwater"
             assert payload["ambient_derived_from"] == ["evt-d1", "evt-f1"]
             assert payload["ambient_derived_at"] == "2026-06-21T03:30:00+00:00"
+            capsule = payload["ambient_continuity_capsule"]
+            assert capsule["current_time_context"]["relative_label"] == "previous work"
+            assert capsule["last_decision"]["source_event_id"] == "evt-d1"
+            assert capsule["source_event_ids"] == ["evt-d1", "evt-f1"]
+            assert capsule["suggested_next_action"] == (
+                "wire standing-self receipts into runtime hydration"
+            )
 
     async def test_coding_turn_emits_exactly_one_brief_no_double_count(self, graph_db):
         """A coding-intent utterance must curate ONCE on the delegation side and
