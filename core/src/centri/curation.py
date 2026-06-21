@@ -1017,7 +1017,12 @@ class Ambient:
     active_projects: List[str] = field(default_factory=list)
     open_loops: List[str] = field(default_factory=list)
     narrative: str = ""
+    # Receipt to the most recent spine event the digest was derived from, plus a
+    # bounded list of the source events it summarized — so the standing self is
+    # auditable back to the verbatim events that produced it (master plan §2.8).
     source_event_id: Optional[str] = None
+    derived_from: List[str] = field(default_factory=list)
+    derived_at: str = ""
 
     def is_empty(self) -> bool:
         return not (self.user_profile or self.identity or self.active_projects or self.open_loops or self.narrative)
@@ -1076,6 +1081,8 @@ async def load_ambient(graph: MemoryGraph, repo_id: Optional[str] = None) -> Amb
                 open_loops=list(data.get("open_loops") or []),
                 narrative=str(data.get("narrative") or ""),
                 source_event_id=f.source_event_id,
+                derived_from=list(data.get("derived_from") or []),
+                derived_at=str(data.get("derived_at") or ""),
             )
     return Ambient(user_profile=user_profile)
 
@@ -1104,6 +1111,8 @@ def _suppress_ambient_legacy(ambient: Ambient) -> Ambient:
         open_loops=[s for s in ambient.open_loops if not _text_mentions_legacy(s)],
         narrative=ambient.narrative if not _text_mentions_legacy(ambient.narrative) else "",
         source_event_id=ambient.source_event_id,
+        derived_from=list(ambient.derived_from),
+        derived_at=ambient.derived_at,
     )
 
 

@@ -226,17 +226,39 @@ class Consolidator:
                     narrative_parts.append(f"  - {loop}")
             narrative = "\n".join(narrative_parts) if narrative_parts else "No recent activity."
 
+            # Receipt the digest back to the spine events it was derived from. The
+            # standing self is one global truth (no thread filter above), so its
+            # provenance spans every session/producer that fed the live graph.
+            # ``derived_from`` is bounded to the same items the digest summarizes;
+            # the headline ``source_event_id`` is the most recent of them, so a
+            # mid-session refresh advances the receipt as new work lands.
+            derivation = [
+                (n.created_at or "", n.source_event_id)
+                for n in (*recent_decisions, *loops)
+                if n.source_event_id
+            ]
+            derivation.sort(key=lambda x: x[0], reverse=True)
+            # Preserve recency order, dedup, and bound the receipt list.
+            derived_from: List[str] = []
+            for _, eid in derivation:
+                if eid not in derived_from:
+                    derived_from.append(eid)
+            derived_from = derived_from[:10]
+            headline_receipt = derived_from[0] if derived_from else None
+
             digest = {
                 "identity": conventions,
                 "active_projects": [str(p) for p in active_projects],
                 "open_loops": top_loops,
                 "narrative": narrative,
+                "derived_from": derived_from,
+                "derived_at": _now(),
             }
             ambient = Fact(
                 id="ambient-standing-context",
                 topic=AMBIENT_TOPIC,
                 statement=json.dumps(digest, sort_keys=True),
-                source_event_id=None,
+                source_event_id=headline_receipt,
                 repo_id=None,
                 tags=[AMBIENT_TAG],
             )
