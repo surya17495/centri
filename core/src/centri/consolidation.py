@@ -85,7 +85,13 @@ _LLM_TIER_EXCLUDED_TYPES = (
     "brief.session_start",
     "hermes.tool.result",
     "ingest.opencode.tool_called",
-    "ingest.opencode.transcript",
+    # NOTE: ``ingest.opencode.transcript`` is deliberately NOT excluded. Those
+    # rows already survived ingestion-time salience filtering (the 95%-noise
+    # stream is dropped at the door in ``ingest/opencode.py``) and carry no
+    # deterministic hint, so the LLM tier is the only path that can promote a
+    # real user/assistant statement into a typed fact. ``tool_called`` and
+    # ``session_activity`` stay excluded: the former is tool-output noise, the
+    # latter already carries deterministic decision/open-loop hints.
     "ingest.opencode.session_activity",
     "centri_app.message.updated",
     "centri_app.session.updated",
