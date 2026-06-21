@@ -1683,6 +1683,8 @@ def curation_breakdown_payload(brief: CuratedBrief) -> Dict[str, Any]:
         "graph_high_water": brief.graph_high_water,
         "lines": brief.receipts(),
         "ambient_source_event_id": brief.ambient.source_event_id,
+        "ambient_derived_from": list(brief.ambient.derived_from),
+        "ambient_derived_at": brief.ambient.derived_at,
     }
 
 

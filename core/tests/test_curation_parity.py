@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from centri.config import Settings  # noqa: E402
 from centri.coordinator import Coordinator  # noqa: E402
-from centri.curation import Curator  # noqa: E402
+from centri.curation import AMBIENT_TAG, AMBIENT_TOPIC, Curator  # noqa: E402
 from centri.db import Database  # noqa: E402
 from centri.memory_graph import STANCE_ADOPTED, STANCE_REJECTED, Decision, Fact, MemoryGraph  # noqa: E402
 from centri.permissions import Permissions  # noqa: E402
@@ -99,6 +99,21 @@ async def _seed(g: MemoryGraph) -> None:
     await g.add_fact(Fact(
         id="f1", topic="testing", statement="integration tests hit a real database, never mocks",
         source_event_id="evt-f1", created_at="2026-01-03T00:00:00+00:00", tags=["convention"],
+    ))
+    await g.add_fact(Fact(
+        id="ambient-1",
+        topic=AMBIENT_TOPIC,
+        statement=json.dumps({
+            "identity": ["build small, test, then push"],
+            "active_projects": ["centri"],
+            "open_loops": ["wire standing-self receipts into runtime hydration"],
+            "narrative": "Current work is Centri continuity.",
+            "derived_from": ["evt-d1", "evt-f1"],
+            "derived_at": "2026-06-21T03:30:00+00:00",
+        }),
+        source_event_id="evt-ambient-highwater",
+        created_at="2026-06-21T03:30:00+00:00",
+        tags=[AMBIENT_TAG],
     ))
 
 
@@ -202,6 +217,29 @@ class TestCurationParity:
         chat_d1 = next(r for r in chat_receipts if r["key"] == "decision:d1")
         deleg_d1 = next(r for r in deleg_receipts if r["key"] == "decision:d1")
         assert chat_d1["source_event_id"] == deleg_d1["source_event_id"] == "evt-d1"
+
+    async def test_both_paths_stamp_standing_self_derivation_receipts(self, graph_db):
+        """The ambient standing-self is part of runtime hydration, not a hidden
+        summary blob: chat turns and delegation/spawn briefs both stamp the same
+        ambient high-water receipt and bounded derivation receipts on the
+        ``curation.brief`` event, so either path can expand the standing-self back
+        to verbatim source events.
+        """
+        db, g = graph_db
+        await _seed(g)
+        coord = _make_coordinator(db, g)
+
+        await coord._curate_chat_context(ContextPacket(), "jwt refresh", chat_thread="thread-chat")
+        await coord.build_delegation_brief(ContextPacket(), "jwt refresh")
+
+        briefs = await _events_of(db, "curation.brief")
+        by_kind = {b["payload"]["turn_kind"]: b["payload"] for b in briefs}
+        assert set(by_kind) == {"chat", "delegation"}
+
+        for payload in by_kind.values():
+            assert payload["ambient_source_event_id"] == "evt-ambient-highwater"
+            assert payload["ambient_derived_from"] == ["evt-d1", "evt-f1"]
+            assert payload["ambient_derived_at"] == "2026-06-21T03:30:00+00:00"
 
     async def test_coding_turn_emits_exactly_one_brief_no_double_count(self, graph_db):
         """A coding-intent utterance must curate ONCE on the delegation side and
