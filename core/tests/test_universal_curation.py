@@ -250,6 +250,7 @@ class TestUniversalCuration:
         assert "surya, founder" in brief.ambient.identity
         # The curated memory actually reached the reasoning input (not a 3-item recall).
         assert "rotating refresh tokens" in (mr.last_reason_prompt or "")
+        assert "Standing self (continuity):" in (mr.last_reason_prompt or "")
 
     async def test_curated_lines_carry_receipts(self, graph_db):
         db, g = graph_db

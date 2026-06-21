@@ -1038,7 +1038,7 @@ class Ambient:
     def render(self, budget: int, counter: Optional[TokenCounter] = None,
                cue_terms: Optional[set] = None) -> str:
         counter = counter or default_token_counter()
-        lines: List[str] = []
+        lines: List[str] = ["Standing self (continuity):"]
         if self.user_profile:
             lines.append("User Profile:")
             for k, v in self.user_profile.items():
@@ -1076,6 +1076,8 @@ class Ambient:
             if continuity_parts:
                 lines.append("Continuity: " + "; ".join(continuity_parts))
         block = "\n".join(lines)
+        if block == "Standing self (continuity):":
+            block = ""
         # Trim to budget deterministically: drop whole words from the end until
         # the real token count fits. Word boundaries keep the trim readable while
         # the counter (not the word count) decides when we are under budget.

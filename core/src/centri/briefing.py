@@ -138,8 +138,27 @@ class BriefingBuilder:
     def _recall(self, packet: ContextPacket) -> str:
         if not packet.relevant_recall:
             return ""
-        lines = [f"  - {item[:240]}" for item in packet.relevant_recall[:5] if item]
+        lines: List[str] = []
+        for item in packet.relevant_recall[:5]:
+            if not item:
+                continue
+            if item.startswith("Standing self (continuity):"):
+                lines.append(self._standing_self_recall(item))
+            else:
+                lines.append(f"  - {item[:240]}")
         return "Relevant memory:\n" + "\n".join(lines) if lines else ""
+
+    def _standing_self_recall(self, item: str) -> str:
+        """Preserve the standing-self preamble in handoff prompts.
+
+        Most recall entries are short bullets, but the curated memory item starts
+        with the ambient standing self followed by cued ledger memory. Truncating
+        that to 240 characters makes spawned hands feel like a fresh session. For
+        this one explicit continuity block, keep the standing-self portion as a
+        named preamble and then include the beginning of the cued memory.
+        """
+        text = item[:1200]
+        return "\n".join(f"  {line}" if line else "" for line in text.splitlines())
 
     def _constraints(self, packet: ContextPacket) -> str:
         cs = packet.constraints

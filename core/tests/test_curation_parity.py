@@ -23,6 +23,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from centri.briefing import BriefingBuilder  # noqa: E402
 from centri.config import Settings  # noqa: E402
 from centri.coordinator import Coordinator  # noqa: E402
 from centri.curation import AMBIENT_TAG, AMBIENT_TOPIC, Curator  # noqa: E402
@@ -155,7 +156,7 @@ async def _events_of(db, type_):
     return out
 
 
-def _make_coordinator(db, graph, *, jobs=None, autonomy="autonomous_local"):
+def _make_coordinator(db, graph, *, jobs=None, autonomy="autonomous_local", briefing_builder=None):
     return Coordinator(
         db=db,
         model_router=_StubModelRouter(),
@@ -167,7 +168,7 @@ def _make_coordinator(db, graph, *, jobs=None, autonomy="autonomous_local"):
         artifacts=None,
         event_bus=None,
         hot_cache=_ColdCache(),
-        briefing_builder=None,
+        briefing_builder=briefing_builder,
         memory_brief=None,
         curator=Curator(graph),
     )
@@ -270,6 +271,25 @@ class TestCurationParity:
             assert capsule["suggested_next_action"] == (
                 "wire standing-self receipts into runtime hydration"
             )
+
+    async def test_delegation_handoff_preserves_standing_self_preamble(self, graph_db):
+        """Spawned/coding hands receive continuity as an explicit preamble.
+
+        The curation path already computes the standing self; this verifies the
+        final hands-facing prompt preserves it by name instead of burying it in a
+        generic, truncated recall bullet.
+        """
+        db, g = graph_db
+        await _seed(g)
+        coord = _make_coordinator(db, g, briefing_builder=BriefingBuilder(max_chars=2500))
+
+        briefing = await coord.build_delegation_brief(ContextPacket(), "continue jwt refresh work")
+
+        assert "Relevant memory:" in briefing
+        assert "Standing self (continuity):" in briefing
+        assert "Current work: Current work is Centri continuity." in briefing
+        assert "Continuity: time=previous work" in briefing
+        assert "next=wire standing-self receipts into runtime hydration" in briefing
 
     async def test_coding_turn_emits_exactly_one_brief_no_double_count(self, graph_db):
         """A coding-intent utterance must curate ONCE on the delegation side and
