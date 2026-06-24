@@ -396,8 +396,8 @@ class TemporalNarrator:
         if repo_id:
             sql += " WHERE (repo_id = ? OR repo_id IS NULL)"
             params.append(repo_id)
-        cur = await self._graph._db._execute(sql, tuple(params))
-        return [dict(r) for r in cur.fetchall()]
+        rows = await self._graph._db._execute(sql, tuple(params))
+        return [dict(r) for r in rows]
 
 
 def _reserved_topics() -> tuple:

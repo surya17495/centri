@@ -116,8 +116,8 @@ class LettaMemoryStore(MemoryStore):
     # -- core blocks --------------------------------------------------------
     async def get_block(self, name: str) -> str:
         await self._ensure()
-        cur = await self._db._execute("SELECT content FROM letta_blocks WHERE name = ?", (name,))
-        row = cur.fetchone()
+        rows = await self._db._execute("SELECT content FROM letta_blocks WHERE name = ?", (name,))
+        row = rows[0] if rows else None
         return row["content"] if row else ""
 
     async def set_block(self, name: str, content: str) -> None:
@@ -130,8 +130,8 @@ class LettaMemoryStore(MemoryStore):
 
     async def all_blocks(self) -> Dict[str, str]:
         await self._ensure()
-        cur = await self._db._execute("SELECT name, content FROM letta_blocks")
-        return {row["name"]: row["content"] for row in cur.fetchall()}
+        rows = await self._db._execute("SELECT name, content FROM letta_blocks")
+        return {row["name"]: row["content"] for row in rows}
 
     # -- archival -----------------------------------------------------------
     async def insert_fact(self, fact: ArchivalFact) -> None:
@@ -165,7 +165,7 @@ class LettaMemoryStore(MemoryStore):
         # supersession — the honest storage-layer model of Letta's archival.
         terms = [t for t in query.lower().split() if len(t) > 2][:4]
         like = "%" + "%".join(terms) + "%" if terms else "%"
-        cur = await self._db._execute(
+        rows = await self._db._execute(
             "SELECT * FROM letta_archival WHERE LOWER(text) LIKE ? ORDER BY created_at DESC LIMIT ?",
             (like, limit),
         )
@@ -174,7 +174,7 @@ class LettaMemoryStore(MemoryStore):
                 id=r["id"], text=r["text"], source_event_id=r["source_event_id"],
                 tags=[t for t in (r["tags"] or "").split(",") if t], created_at=r["created_at"],
             )
-            for r in cur.fetchall()
+            for r in rows
         ]
 
     # -- synthesis ----------------------------------------------------------

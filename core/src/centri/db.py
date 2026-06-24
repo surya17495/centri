@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -245,12 +246,14 @@ class Database:
     def __init__(self, path: Optional[Path] = None):
         self._path = path or get_settings().db_path
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = asyncio.Lock()
-        self._conn: Optional[sqlite3.Connection] = None
+        self._local = threading.local()
         self._ensure_schema()
 
     def _ensure_schema(self) -> None:
         conn = sqlite3.connect(str(self._path))
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")  
+        conn.execute("PRAGMA busy_timeout=5000")
         conn.executescript(_SCHEMA)
         self._migrate(conn)
         conn.commit()
@@ -325,18 +328,27 @@ class Database:
                     (row[0], row[1], row[2], now_iso, now_iso),
                 )
 
-    async def _get_conn(self) -> sqlite3.Connection:
-        if self._conn is None:
-            self._conn = sqlite3.connect(str(self._path))
-            self._conn.row_factory = sqlite3.Row
-        return self._conn
+    def _get_thread_conn(self) -> sqlite3.Connection:
+        """Get or create a thread-local connection. Each uvicorn worker thread
+        gets its own connection, cached in thread-local storage. WAL mode allows
+        concurrent readers; busy_timeout handles writer contention."""
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(str(self._path), check_same_thread=True)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            self._local.conn = conn
+        return conn
 
-    async def _execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
-        async with self._lock:
-            conn = await self._get_conn()
+    async def _execute(self, sql: str, params: tuple = ()) -> List[sqlite3.Row]:
+        def _run():
+            conn = self._get_thread_conn()
             cur = conn.execute(sql, params)
             conn.commit()
-            return cur
+            return cur.fetchall()
+        return await asyncio.to_thread(_run)
 
     # events
     async def append_event(
@@ -355,13 +367,14 @@ class Database:
         # Redact secrets before the payload ever touches the append-only ledger.
         payload_json = json.dumps(redact_jsonable(payload or {}))
 
-        async with self._lock:
-            conn = await self._get_conn()
+        def _run():
+            conn = self._get_thread_conn()
             conn.execute(
                 "INSERT INTO events (id, type, source, ts, thread_id, task_id, repo_id, tenant_id, importance, payload_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (event_id, type, source, ts, thread_id, task_id, repo_id, tenant_id, importance, payload_json),
             )
             conn.commit()
+        await asyncio.to_thread(_run)
 
     _IMPORTANCE_RANK = {"low": 0, "normal": 1, "high": 2}
 
@@ -390,17 +403,17 @@ class Database:
 
         if thread_id:
             params.extend([tenant_id, thread_id, limit])
-            cur = await self._execute(
+            rows = await self._execute(
                 f"SELECT * FROM events WHERE tenant_id = ? AND thread_id = ?{importance_clause} ORDER BY ts DESC LIMIT ?",
                 tuple(params),
             )
         else:
             params.extend([tenant_id, limit])
-            cur = await self._execute(
+            rows = await self._execute(
                 f"SELECT * FROM events WHERE tenant_id = ?{importance_clause} ORDER BY ts DESC LIMIT ?",
                 tuple(params),
             )
-        return [dict(row) for row in cur.fetchall()]
+        return [dict(row) for row in rows]
 
     async def events_after(
         self,
@@ -431,17 +444,17 @@ class Database:
 
         if after_ts:
             params.extend([tenant_id, after_ts, after_ts, after_id, limit])
-            cur = await self._execute(
+            rows = await self._execute(
                 f"SELECT * FROM events WHERE tenant_id = ? AND (ts > ? OR (ts = ? AND id > ?)){importance_clause} ORDER BY ts ASC, id ASC LIMIT ?",
                 tuple(params),
             )
         else:
             params.extend([tenant_id, limit])
-            cur = await self._execute(
+            rows = await self._execute(
                 f"SELECT * FROM events WHERE tenant_id = ?{importance_clause} ORDER BY ts ASC, id ASC LIMIT ?",
                 tuple(params),
             )
-        return [dict(row) for row in cur.fetchall()]
+        return [dict(row) for row in rows]
 
     async def search_events(
         self,
@@ -469,7 +482,7 @@ class Database:
                 "high": {"high"},
             }[min_importance]
             placeholders = ",".join("?" for _ in allowed)
-            cur = await self._execute(
+            rows = await self._execute(
                 f"""
                 SELECT events.id AS event_id, event_fts.text, event_fts.type,
                        event_fts.source, events.thread_id
@@ -484,7 +497,7 @@ class Database:
                 """,
                 (query, *allowed, limit),
             )
-            return [dict(row) for row in cur.fetchall()]
+            return [dict(row) for row in rows]
         except sqlite3.OperationalError as e:
             logger.warning("FTS search failed: %s", e)
             return []
@@ -506,14 +519,14 @@ class Database:
 
     async def list_threads(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
         if status:
-            cur = await self._execute("SELECT * FROM threads WHERE status = ? ORDER BY updated_at DESC", (status,))
+            rows = await self._execute("SELECT * FROM threads WHERE status = ? ORDER BY updated_at DESC", (status,))
         else:
-            cur = await self._execute("SELECT * FROM threads ORDER BY updated_at DESC")
-        return [dict(row) for row in cur.fetchall()]
+            rows = await self._execute("SELECT * FROM threads ORDER BY updated_at DESC")
+        return [dict(row) for row in rows]
 
     async def get_thread(self, thread_id: str) -> Optional[Dict[str, Any]]:
-        cur = await self._execute("SELECT * FROM threads WHERE id = ?", (thread_id,))
-        row = cur.fetchone()
+        rows = await self._execute("SELECT * FROM threads WHERE id = ?", (thread_id,))
+        row = rows[0] if rows else None
         return dict(row) if row else None
 
     async def update_thread(
@@ -610,37 +623,37 @@ class Database:
 
     async def list_tasks(self, thread_id: Optional[str] = None, status: Optional[str] = None) -> List[Dict[str, Any]]:
         if thread_id and status:
-            cur = await self._execute(
+            rows = await self._execute(
                 "SELECT * FROM tasks WHERE thread_id = ? AND status = ? ORDER BY updated_at DESC",
                 (thread_id, status),
             )
         elif status:
-            cur = await self._execute(
+            rows = await self._execute(
                 "SELECT * FROM tasks WHERE status = ? ORDER BY updated_at DESC",
                 (status,),
             )
         elif thread_id:
-            cur = await self._execute(
+            rows = await self._execute(
                 "SELECT * FROM tasks WHERE thread_id = ? ORDER BY updated_at DESC",
                 (thread_id,),
             )
         else:
-            cur = await self._execute("SELECT * FROM tasks ORDER BY updated_at DESC")
-        return [dict(row) for row in cur.fetchall()]
+            rows = await self._execute("SELECT * FROM tasks ORDER BY updated_at DESC")
+        return [dict(row) for row in rows]
 
     async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
-        cur = await self._execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
-        row = cur.fetchone()
+        rows = await self._execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+        row = rows[0] if rows else None
         return dict(row) if row else None
 
     async def event_exists(self, event_id: str) -> bool:
-        cur = await self._execute("SELECT 1 FROM events WHERE id = ? LIMIT 1", (event_id,))
-        return cur.fetchone() is not None
+        rows = await self._execute("SELECT 1 FROM events WHERE id = ? LIMIT 1", (event_id,))
+        return bool(rows)
 
     # ingest_state — per-source high-water mark for external store tailing (3b.3)
     async def get_ingest_state(self, source: str) -> Optional[Dict[str, Any]]:
-        cur = await self._execute("SELECT * FROM ingest_state WHERE source = ?", (source,))
-        row = cur.fetchone()
+        rows = await self._execute("SELECT * FROM ingest_state WHERE source = ?", (source,))
+        row = rows[0] if rows else None
         return dict(row) if row else None
 
     async def get_ingest_high_water(self, source: str) -> str:
@@ -654,8 +667,8 @@ class Database:
         client localStorage — so a re-install / new client still knows whether
         memory has been seeded from the user's coding-agent histories.
         """
-        cur = await self._execute("SELECT 1 FROM ingest_state LIMIT 1")
-        return cur.fetchone() is not None
+        rows = await self._execute("SELECT 1 FROM ingest_state LIMIT 1")
+        return bool(rows)
 
     async def set_ingest_high_water(
         self,
@@ -676,10 +689,10 @@ class Database:
 
     # Shutdown hook
     async def close(self) -> None:
-        async with self._lock:
-            if self._conn:
-                self._conn.close()
-                self._conn = None
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            self._local.conn = None
+            await asyncio.to_thread(conn.close)
 
     # approvals
     async def create_approval(
@@ -713,19 +726,19 @@ class Database:
         )
 
     async def get_approval(self, approval_id: str) -> Optional[Dict[str, Any]]:
-        cur = await self._execute("SELECT * FROM approvals WHERE id = ?", (approval_id,))
-        row = cur.fetchone()
+        rows = await self._execute("SELECT * FROM approvals WHERE id = ?", (approval_id,))
+        row = rows[0] if rows else None
         return dict(row) if row else None
 
     async def pending_approvals(self, task_id: Optional[str] = None) -> List[Dict[str, Any]]:
         if task_id:
-            cur = await self._execute(
+            rows = await self._execute(
                 "SELECT * FROM approvals WHERE task_id = ? AND status = 'pending' ORDER BY requested_at DESC",
                 (task_id,),
             )
         else:
-            cur = await self._execute("SELECT * FROM approvals WHERE status = 'pending' ORDER BY requested_at DESC")
-        return [dict(row) for row in cur.fetchall()]
+            rows = await self._execute("SELECT * FROM approvals WHERE status = 'pending' ORDER BY requested_at DESC")
+        return [dict(row) for row in rows]
 
     # messages
     async def store_message(
@@ -763,10 +776,10 @@ class Database:
 
     async def active_repo(self, root: Optional[str] = None) -> Optional[Dict[str, Any]]:
         if root:
-            cur = await self._execute("SELECT * FROM repos WHERE root = ?", (root,))
+            rows = await self._execute("SELECT * FROM repos WHERE root = ?", (root,))
         else:
-            cur = await self._execute("SELECT * FROM repos ORDER BY last_seen DESC LIMIT 1")
-        row = cur.fetchone()
+            rows = await self._execute("SELECT * FROM repos ORDER BY last_seen DESC LIMIT 1")
+        row = rows[0] if rows else None
         return dict(row) if row else None
 
     # projects
@@ -790,16 +803,16 @@ class Database:
         return project_id
 
     async def get_project(self, project_id: str) -> Optional[Dict[str, Any]]:
-        cur = await self._execute("SELECT * FROM projects WHERE id = ?", (project_id,))
-        row = cur.fetchone()
+        rows = await self._execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+        row = rows[0] if rows else None
         return dict(row) if row else None
 
     async def get_project_by_ref(self, kind: str, ref: str) -> Optional[Dict[str, Any]]:
-        cur = await self._execute(
+        rows = await self._execute(
             "SELECT * FROM projects WHERE kind = ? AND ref = ? LIMIT 1",
             (kind, ref),
         )
-        row = cur.fetchone()
+        row = rows[0] if rows else None
         return dict(row) if row else None
 
     async def resolve_project_for_repo(
@@ -854,10 +867,9 @@ class Database:
         """
         import json as _json
 
-        cur = await self._execute(
+        rows = await self._execute(
             "SELECT id, thread_id, source, payload_json FROM events WHERE repo_id IS NULL OR repo_id = ''"
         )
-        rows = cur.fetchall()
         resolved = 0
         skipped = 0
 
@@ -875,10 +887,10 @@ class Database:
 
                 # Look up the session row for directory/title metadata.
                 if thread_id:
-                    srow = await self._execute(
+                    sresults = await self._execute(
                         "SELECT payload_json FROM sessions WHERE id = ?", (thread_id,)
                     )
-                    sresult = srow.fetchone()
+                    sresult = sresults[0] if sresults else None
                     if sresult:
                         try:
                             spayload = _json.loads(sresult["payload_json"]) if sresult["payload_json"] else {}
@@ -942,11 +954,11 @@ class Database:
 
     async def get_working_context(self, thread_id: str) -> Dict[str, str]:
         """Read all working-memory entries for a thread."""
-        cur = await self._execute(
+        rows = await self._execute(
             "SELECT key, value FROM working_memory WHERE thread_id = ?",
             (thread_id,),
         )
-        return {row["key"]: row["value"] for row in cur.fetchall()}
+        return {row["key"]: row["value"] for row in rows}
 
     async def clear_working_context(self, thread_id: str) -> None:
         """Discard all working-memory entries for a thread (on session end)."""
@@ -976,28 +988,28 @@ class Database:
 
     async def list_sessions(self, hand: Optional[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
         if hand:
-            cur = await self._execute(
+            rows = await self._execute(
                 "SELECT * FROM sessions WHERE hand = ? ORDER BY last_seen DESC LIMIT ?",
                 (hand, limit),
             )
         else:
-            cur = await self._execute("SELECT * FROM sessions ORDER BY last_seen DESC LIMIT ?", (limit,))
-        return [dict(row) for row in cur.fetchall()]
+            rows = await self._execute("SELECT * FROM sessions ORDER BY last_seen DESC LIMIT ?", (limit,))
+        return [dict(row) for row in rows]
 
     async def latest_session(self, hand: str = "opencode") -> Optional[Dict[str, Any]]:
-        cur = await self._execute(
+        rows = await self._execute(
             "SELECT * FROM sessions WHERE hand = ? ORDER BY last_seen DESC LIMIT 1",
             (hand,),
         )
-        row = cur.fetchone()
+        row = rows[0] if rows else None
         return dict(row) if row else None
 
     # ------------------------------------------------------------------
     # identity_cache
     # ------------------------------------------------------------------
     async def get_identity_cache(self, agent_id: str) -> Optional[Dict[str, Any]]:
-        cur = await self._execute("SELECT * FROM identity_cache WHERE agent_id = ?", (agent_id,))
-        row = cur.fetchone()
+        rows = await self._execute("SELECT * FROM identity_cache WHERE agent_id = ?", (agent_id,))
+        row = rows[0] if rows else None
         return dict(row) if row else None
 
     async def upsert_identity_cache(
@@ -1016,8 +1028,8 @@ class Database:
 
     # runtime_settings
     async def get_setting_override(self, key: str) -> Optional[str]:
-        cur = await self._execute("SELECT value FROM runtime_settings WHERE key = ?", (key,))
-        row = cur.fetchone()
+        rows = await self._execute("SELECT value FROM runtime_settings WHERE key = ?", (key,))
+        row = rows[0] if rows else None
         return row["value"] if row else None
 
     async def set_setting_override(self, key: str, value: str) -> None:
@@ -1027,8 +1039,8 @@ class Database:
         )
 
     async def get_all_setting_overrides(self) -> Dict[str, str]:
-        cur = await self._execute("SELECT key, value FROM runtime_settings")
-        return {row["key"]: row["value"] for row in cur.fetchall()}
+        rows = await self._execute("SELECT key, value FROM runtime_settings")
+        return {row["key"]: row["value"] for row in rows}
 
 
 def _now_iso() -> str:

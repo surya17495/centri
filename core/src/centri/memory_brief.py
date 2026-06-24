@@ -215,11 +215,11 @@ class ProactiveBriefBuilder:
         from datetime import datetime, timedelta, timezone
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
         try:
-            cur = await self._db._execute(
+            rows = await self._db._execute(
                 "SELECT type, payload_json FROM events WHERE tenant_id = 'local' AND type IN ('user.utterance', 'ingest.opencode.transcript', 'hermes.user.message', 'hermes.assistant.message') AND ts >= ? ORDER BY ts DESC LIMIT 50",
                 (cutoff,)
             )
-            changed_events = [dict(row) for row in cur.fetchall()]
+            changed_events = [dict(row) for row in rows]
         except Exception:
             changed_events = []
 

@@ -1296,7 +1296,7 @@ async def curate(
                     """,
                     (fts_query,),
                 )
-                raw_events = [dict(row) for row in cur.fetchall()]
+                raw_events = [dict(row) for row in cur]
             except Exception as e:
                 logger.warning("FTS recall fallback failed, trying LIKE query: %s", e)
                 try:
@@ -1311,7 +1311,7 @@ async def curate(
                         """,
                         (f"%{cue.raw}%",),
                     )
-                    raw_events = [dict(row) for row in cur.fetchall()]
+                    raw_events = [dict(row) for row in cur]
                 except Exception as e2:
                     logger.error("LIKE fallback also failed: %s", e2)
             

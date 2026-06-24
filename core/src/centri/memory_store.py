@@ -117,8 +117,8 @@ class SqliteMemoryStore(MemoryStore):
     # -- core memory blocks -------------------------------------------------
     async def get_block(self, name: str) -> str:
         await self._ensure_tables()
-        cur = await self._db._execute("SELECT content FROM memory_blocks WHERE name = ?", (name,))
-        row = cur.fetchone()
+        rows = await self._db._execute("SELECT content FROM memory_blocks WHERE name = ?", (name,))
+        row = rows[0] if rows else None
         return row["content"] if row else ""
 
     async def set_block(self, name: str, content: str) -> None:
@@ -131,8 +131,8 @@ class SqliteMemoryStore(MemoryStore):
 
     async def all_blocks(self) -> Dict[str, str]:
         await self._ensure_tables()
-        cur = await self._db._execute("SELECT name, content FROM memory_blocks")
-        stored = {row["name"]: row["content"] for row in cur.fetchall()}
+        rows = await self._db._execute("SELECT name, content FROM memory_blocks")
+        stored = {row["name"]: row["content"] for row in rows}
         return {name: stored.get(name, "") for name in CORE_BLOCKS}
 
     # -- archival facts -----------------------------------------------------
@@ -145,7 +145,7 @@ class SqliteMemoryStore(MemoryStore):
 
     async def search_facts(self, query: str, limit: int = 10) -> List[ArchivalFact]:
         await self._ensure_tables()
-        cur = await self._db._execute(
+        rows = await self._db._execute(
             "SELECT * FROM memory_facts WHERE text LIKE ? ORDER BY created_at DESC LIMIT ?",
             (f"%{query}%", limit),
         )
@@ -157,7 +157,7 @@ class SqliteMemoryStore(MemoryStore):
                 tags=[t for t in (row["tags"] or "").split(",") if t],
                 created_at=row["created_at"],
             )
-            for row in cur.fetchall()
+            for row in rows
         ]
 
     # -- synthesis ----------------------------------------------------------

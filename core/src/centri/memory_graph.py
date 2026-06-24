@@ -205,8 +205,8 @@ class MemoryGraph:
         # ALTER in tenant_id if an older table is missing it. Mirrors Database._migrate
         # so the column is present no matter which path created the table first.
         for table in ("mem_decisions", "mem_facts", "mem_open_loops"):
-            cur = await self._db._execute(f"PRAGMA table_info({table})")
-            cols = {r["name"] for r in cur.fetchall()}
+            rows = await self._db._execute(f"PRAGMA table_info({table})")
+            cols = {r["name"] for r in rows}
             if "tenant_id" not in cols:
                 await self._db._execute(
                     f"ALTER TABLE {table} ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'local'"
@@ -215,8 +215,8 @@ class MemoryGraph:
         # float array, nullable). Open loops are prospective state, not retrieval
         # candidates by vector, so they keep no vector column.
         for table in ("mem_decisions", "mem_facts"):
-            cur = await self._db._execute(f"PRAGMA table_info({table})")
-            cols = {r["name"] for r in cur.fetchall()}
+            rows = await self._db._execute(f"PRAGMA table_info({table})")
+            cols = {r["name"] for r in rows}
             if "vector" not in cols:
                 await self._db._execute(f"ALTER TABLE {table} ADD COLUMN vector TEXT")
         self._ready = True
@@ -320,8 +320,8 @@ class MemoryGraph:
             sql += " AND stance = ?"
             params.append(stance)
         sql += " ORDER BY created_at DESC"
-        cur = await self._db._execute(sql, tuple(params))
-        return [self._row_to_decision(r) for r in cur.fetchall()]
+        rows = await self._db._execute(sql, tuple(params))
+        return [self._row_to_decision(r) for r in rows]
 
     async def current_facts(
         self, repo_id: Optional[str] = None, include_reserved: bool = False
@@ -337,8 +337,8 @@ class MemoryGraph:
             sql += f" AND topic NOT IN ({placeholders})"
             params.extend(RESERVED_FACT_TOPICS)
         sql += " ORDER BY created_at DESC"
-        cur = await self._db._execute(sql, tuple(params))
-        return [self._row_to_fact(r) for r in cur.fetchall()]
+        rows = await self._db._execute(sql, tuple(params))
+        return [self._row_to_fact(r) for r in rows]
 
     async def rejected_approaches(self, repo_id: Optional[str] = None) -> List[Decision]:
         """Live rejections — what we decided NOT to do. Feeds the re-proposal guard."""
@@ -347,10 +347,10 @@ class MemoryGraph:
     async def fact_history(self, topic: str) -> List[Fact]:
         """All facts for a topic, newest first — for "what was true in March"."""
         await self.ensure_tables()
-        cur = await self._db._execute(
+        rows = await self._db._execute(
             "SELECT * FROM mem_facts WHERE topic = ? ORDER BY created_at DESC", (topic,)
         )
-        return [self._row_to_fact(r) for r in cur.fetchall()]
+        return [self._row_to_fact(r) for r in rows]
 
     async def open_loops(
         self, repo_id: Optional[str] = None, states: Optional[List[str]] = None
@@ -364,13 +364,13 @@ class MemoryGraph:
             sql += " AND (repo_id = ? OR repo_id IS NULL)"
             params.append(repo_id)
         sql += " ORDER BY last_touched_at ASC"
-        cur = await self._db._execute(sql, tuple(params))
-        return [self._row_to_loop(r) for r in cur.fetchall()]
+        rows = await self._db._execute(sql, tuple(params))
+        return [self._row_to_loop(r) for r in rows]
 
     async def get_open_loop(self, loop_id: str) -> Optional[OpenLoop]:
         await self.ensure_tables()
-        cur = await self._db._execute("SELECT * FROM mem_open_loops WHERE id = ?", (loop_id,))
-        row = cur.fetchone()
+        rows = await self._db._execute("SELECT * FROM mem_open_loops WHERE id = ?", (loop_id,))
+        row = rows[0] if rows else None
         return self._row_to_loop(row) if row else None
 
     # ------------------------------------------------------------------
@@ -409,11 +409,11 @@ class MemoryGraph:
         key = intent.strip().lower()[:60]
         if not key:
             return None
-        cur = await self._db._execute(
+        rows = await self._db._execute(
             "SELECT * FROM mem_open_loops WHERE LOWER(intent) LIKE ? ORDER BY created_at DESC LIMIT 1",
             (f"{key}%",),
         )
-        row = cur.fetchone()
+        row = rows[0] if rows else None
         return self._row_to_loop(row) if row else None
 
     # ------------------------------------------------------------------
@@ -453,31 +453,31 @@ class MemoryGraph:
             ("facts", "mem_facts"),
             ("open_loops", "mem_open_loops"),
         ):
-            cur = await self._db._execute(f"SELECT COUNT(*) AS n FROM {table}")
-            out[label] = cur.fetchone()["n"]
+            rows = await self._db._execute(f"SELECT COUNT(*) AS n FROM {table}")
+            out[label] = rows[0]["n"] if rows else 0
         return out
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
     async def _live_fact_for_topic(self, topic: str, repo_id: Optional[str]) -> Optional[Fact]:
-        cur = await self._db._execute(
+        rows = await self._db._execute(
             "SELECT * FROM mem_facts WHERE topic = ? AND superseded_by IS NULL "
             "ORDER BY created_at DESC LIMIT 1",
             (topic,),
         )
-        row = cur.fetchone()
+        row = rows[0] if rows else None
         return self._row_to_fact(row) if row else None
 
     async def _live_decision_for(
         self, topic: str, stance: str, repo_id: Optional[str]
     ) -> Optional[Decision]:
-        cur = await self._db._execute(
+        rows = await self._db._execute(
             "SELECT * FROM mem_decisions WHERE topic = ? AND stance = ? AND superseded_by IS NULL "
             "ORDER BY created_at DESC LIMIT 1",
             (topic, stance),
         )
-        row = cur.fetchone()
+        row = rows[0] if rows else None
         return self._row_to_decision(row) if row else None
 
     @staticmethod
@@ -543,8 +543,8 @@ class MemoryGraph:
 
     async def get_profile(self) -> Dict[str, str]:
         await self.ensure_tables()
-        cur = await self._db._execute("SELECT key, value FROM mem_profile")
-        return {row["key"]: row["value"] for row in cur.fetchall()}
+        rows = await self._db._execute("SELECT key, value FROM mem_profile")
+        return {row["key"]: row["value"] for row in rows}
 
     async def set_profile(self, key: str, value: str, source_event_id: str = "") -> None:
         await self.ensure_tables()
