@@ -70,6 +70,31 @@ POLICY_VERSION = "3c.2"
 POLICY_VERSION_EMBED = "3c.2-embed"
 
 
+@dataclass
+class GraphSnapshot:
+    """Pre-fetched graph data for a single recall request. Eliminates redundant
+    DB reads by fetching decisions, facts, and open_loops once and passing them
+    through CueBuilder, gather_candidates, curate, and load_ambient."""
+    decisions: list
+    facts: list
+    loops: list
+
+    @classmethod
+    async def fetch(cls, graph, repo_id=None):
+        import asyncio as _aio
+        decisions, facts, loops = await _aio.gather(
+            graph.current_decisions(repo_id=repo_id),
+            graph.current_facts(repo_id=repo_id, include_reserved=True),
+            graph.open_loops(repo_id=repo_id, states=["open"]),
+        )
+        return cls(decisions=decisions, facts=facts, loops=loops)
+
+    def facts_filtered(self):
+        """Facts excluding reserved topics — mirrors current_facts(include_reserved=False)."""
+        from centri.memory_graph import RESERVED_FACT_TOPICS
+        return [f for f in self.facts if f.topic not in RESERVED_FACT_TOPICS]
+
+
 def active_policy_version(weights: "RankWeights") -> str:
     """The policy version implied by the active ranker weights.
 
@@ -578,6 +603,7 @@ class CueBuilder:
         recent_turns: Optional[Sequence[str]] = None,
         active_files: Optional[Sequence[str]] = None,
         active_task: Optional[str] = None,
+        snapshot: Optional["GraphSnapshot"] = None,
     ) -> Cue:
         await self._graph.ensure_tables()
         base = _tokens(utterance)
@@ -586,7 +612,7 @@ class CueBuilder:
 
         # Alias expansion — aliases are facts tagged "alias".
         alias_hits: List[str] = []
-        aliases = await self._alias_table(repo_id)
+        aliases = await self._alias_table(repo_id, snapshot=snapshot)
         utter_l = (utterance or "").lower()
         for phrase, canonical in aliases:
             if phrase and phrase in utter_l:
@@ -621,7 +647,7 @@ class CueBuilder:
         # base terms. A neighbor shares a term with a matched node; we add its
         # topic tokens so a sibling decision on the same entity can surface.
         hop_terms: List[str] = []
-        matched_topics = await self._matched_topics(set(base) | set(alias_hits and _tokens(" ".join(alias_hits))), repo_id)
+        matched_topics = await self._matched_topics(set(base) | set(alias_hits and _tokens(" ".join(alias_hits))), repo_id, snapshot=snapshot)
         for topic in matched_topics:
             for t in _tokens(topic):
                 if t not in terms:
@@ -642,8 +668,11 @@ class CueBuilder:
             active_task=active_task,
         )
 
-    async def _alias_table(self, repo_id: Optional[str]) -> List[Tuple[str, str]]:
-        facts = await self._graph.current_facts(repo_id=repo_id)
+    async def _alias_table(self, repo_id: Optional[str], *, snapshot: Optional["GraphSnapshot"] = None) -> List[Tuple[str, str]]:
+        if snapshot:
+            facts = snapshot.facts
+        else:
+            facts = await self._graph.current_facts(repo_id=repo_id)
         out: List[Tuple[str, str]] = []
         for f in facts:
             if "alias" in f.tags:
@@ -653,17 +682,25 @@ class CueBuilder:
         out.sort(key=lambda p: (-len(p[0]), p[0]))
         return out
 
-    async def _matched_topics(self, base_terms: set, repo_id: Optional[str]) -> List[str]:
+    async def _matched_topics(self, base_terms: set, repo_id: Optional[str], *, snapshot: Optional["GraphSnapshot"] = None) -> List[str]:
         if not base_terms:
             return []
         topics: List[str] = []
         seen: set = set()
-        for d in await self._graph.current_decisions(repo_id=repo_id):
+        if snapshot:
+            decisions = snapshot.decisions
+        else:
+            decisions = await self._graph.current_decisions(repo_id=repo_id)
+        for d in decisions:
             if base_terms & set(_tokens(d.topic) + _tokens(d.statement)):
                 if d.topic not in seen:
                     topics.append(d.topic)
                     seen.add(d.topic)
-        for f in await self._graph.current_facts(repo_id=repo_id):
+        if snapshot:
+            facts = snapshot.facts_filtered()
+        else:
+            facts = await self._graph.current_facts(repo_id=repo_id)
+        for f in facts:
             if base_terms & set(_tokens(f.topic) + _tokens(f.statement)):
                 if f.topic not in seen:
                     topics.append(f.topic)
@@ -924,6 +961,7 @@ async def gather_candidates(
     repo_id: Optional[str],
     *,
     facts: Optional[Any] = None,
+    snapshot: Optional["GraphSnapshot"] = None,
 ) -> List[Candidate]:
     """Pull the live (non-superseded) graph items as scorable candidates.
 
@@ -934,7 +972,11 @@ async def gather_candidates(
     await graph.ensure_tables()
     cands: List[Candidate] = []
 
-    if facts is None:
+    if snapshot:
+        decisions = snapshot.decisions
+        facts_source = snapshot.facts_filtered()
+        loops = snapshot.loops
+    elif facts is None:
         decisions, facts_source, loops = await asyncio.gather(
             graph.current_decisions(repo_id=repo_id),
             graph.current_facts(repo_id=repo_id),
@@ -1084,6 +1126,7 @@ async def load_ambient(
     repo_id: Optional[str] = None,
     *,
     facts: Optional[Any] = None,
+    snapshot: Optional["GraphSnapshot"] = None,
 ) -> Ambient:
     """Read the consolidation-maintained ambient digest from the graph."""
     await graph.ensure_tables()
@@ -1092,7 +1135,9 @@ async def load_ambient(
     except Exception:
         user_profile = {}
 
-    if facts is not None:
+    if snapshot:
+        facts_list = snapshot.facts
+    elif facts is not None:
         if hasattr(facts, "__await__"):
             facts_list = await facts
         else:
@@ -1294,6 +1339,7 @@ async def curate(
     counter: Optional[TokenCounter] = None,
     embedding_provider: Optional[EmbeddingProvider] = None,
     thread_id: Optional[str] = None,
+    snapshot: Optional["GraphSnapshot"] = None,
 ) -> CuratedBrief:
     """Pure, versioned curation: ``brief = curate(graph, cue, budget, version)``.
 
@@ -1309,15 +1355,23 @@ async def curate(
     embedding_provider = embedding_provider or NullEmbeddingProvider()
     repo_id = repo_id if repo_id is not None else cue.repo_id
 
-    facts_task = asyncio.create_task(
-        graph.current_facts(repo_id=repo_id, include_reserved=True)
-    )
-    ambient_task = asyncio.create_task(
-        load_ambient(graph, repo_id=repo_id, facts=facts_task)
-    )
-    candidates_task = asyncio.create_task(
-        gather_candidates(graph, cue, repo_id, facts=facts_task)
-    )
+    if snapshot:
+        ambient_task = asyncio.create_task(
+            load_ambient(graph, repo_id=repo_id, snapshot=snapshot)
+        )
+        candidates_task = asyncio.create_task(
+            gather_candidates(graph, cue, repo_id, snapshot=snapshot)
+        )
+    else:
+        facts_task = asyncio.create_task(
+            graph.current_facts(repo_id=repo_id, include_reserved=True)
+        )
+        ambient_task = asyncio.create_task(
+            load_ambient(graph, repo_id=repo_id, facts=facts_task)
+        )
+        candidates_task = asyncio.create_task(
+            gather_candidates(graph, cue, repo_id, facts=facts_task)
+        )
 
     ambient = await ambient_task
     candidates = await candidates_task
@@ -1659,6 +1713,7 @@ class Curator:
             except Exception:
                 pass
 
+        snapshot = await GraphSnapshot.fetch(self._graph, repo_id=repo_id)
         cue = await self._cue_builder.build(
             utterance,
             thread_id=thread_id,
@@ -1666,13 +1721,14 @@ class Curator:
             recent_turns=recent_turns,
             active_files=active_files,
             active_task=active_task,
+            snapshot=snapshot,
         )
         cue = await self._expander.expand(cue)
         # Embed the cue write-time-style (no-op when honest-unavailable). The
         # ranker then does pure cosine over stored candidate vectors at read.
         if self._embeddings.available and cue.vector is None:
             cue.vector = self._embeddings.embed(cue.raw)
-        candidates = await gather_candidates(self._graph, cue, repo_id)
+        candidates = await gather_candidates(self._graph, cue, repo_id, snapshot=snapshot)
         brief = await curate(
             self._graph,
             cue,
@@ -1683,6 +1739,7 @@ class Curator:
             counter=self._counter,
             embedding_provider=self._embeddings,
             thread_id=thread_id,
+            snapshot=snapshot,
         )
 
         # Write working memory: store the current utterance and active state so
