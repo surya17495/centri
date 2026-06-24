@@ -92,6 +92,14 @@ class ContextRequest(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+    # The curation pipeline parallelizes graph queries via asyncio.to_thread.
+    # With 4 CPUs the default pool (8 threads) is too small for concurrent
+    # recalls — each spawns 6+ to_thread calls. A larger pool prevents
+    # queueing that would otherwise serialize concurrent requests.
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=32))
     await runtime.boot()
     yield
     await runtime.shutdown()
