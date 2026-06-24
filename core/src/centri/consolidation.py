@@ -67,6 +67,27 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _relative_label(generated_at: str, latest_event_at: str) -> str:
+    """Small deterministic time label for the continuity capsule.
+
+    The capsule should make the orchestrator feel aware of shared time without
+    storing brittle freeform prose. The exact timestamps remain the source of
+    truth; this label is only a compact affordance for prompt/render consumers.
+    """
+    if not latest_event_at:
+        return "no prior work"
+    try:
+        generated = datetime.fromisoformat(generated_at)
+        latest = datetime.fromisoformat(latest_event_at)
+    except (TypeError, ValueError):
+        return "previous work"
+    if generated.date() == latest.date():
+        return "earlier today"
+    if (generated.date() - latest.date()).days == 1:
+        return "yesterday"
+    return "previous work"
+
+
 # Event families the worker inspects. Synthesis hints live in ``payload`` under
 # these keys; an event may carry several at once (e.g. a task.completed that both
 # records a decision and closes an open loop).
@@ -85,7 +106,13 @@ _LLM_TIER_EXCLUDED_TYPES = (
     "brief.session_start",
     "hermes.tool.result",
     "ingest.opencode.tool_called",
-    "ingest.opencode.transcript",
+    # NOTE: ``ingest.opencode.transcript`` is deliberately NOT excluded. Those
+    # rows already survived ingestion-time salience filtering (the 95%-noise
+    # stream is dropped at the door in ``ingest/opencode.py``) and carry no
+    # deterministic hint, so the LLM tier is the only path that can promote a
+    # real user/assistant statement into a typed fact. ``tool_called`` and
+    # ``session_activity`` stay excluded: the former is tool-output noise, the
+    # latter already carries deterministic decision/open-loop hints.
     "ingest.opencode.session_activity",
     "centri_app.message.updated",
     "centri_app.session.updated",
@@ -220,17 +247,73 @@ class Consolidator:
                     narrative_parts.append(f"  - {loop}")
             narrative = "\n".join(narrative_parts) if narrative_parts else "No recent activity."
 
+            # Receipt the digest back to the spine events it was derived from. The
+            # standing self is one global truth (no thread filter above), so its
+            # provenance spans every session/producer that fed the live graph.
+            # ``derived_from`` is bounded to the same items the digest summarizes;
+            # the headline ``source_event_id`` is the most recent of them, so a
+            # mid-session refresh advances the receipt as new work lands.
+            derivation = [
+                (n.created_at or "", n.source_event_id)
+                for n in (*recent_decisions, *loops)
+                if n.source_event_id
+            ]
+            derivation.sort(key=lambda x: x[0], reverse=True)
+            # Preserve recency order, dedup, and bound the receipt list.
+            derived_from: List[str] = []
+            for _, eid in derivation:
+                if eid not in derived_from:
+                    derived_from.append(eid)
+            derived_from = derived_from[:10]
+            headline_receipt = derived_from[0] if derived_from else None
+            generated_at = _now()
+            latest_event_at = derivation[0][0] if derivation else ""
+
+            last_decision: Dict[str, Any] = {}
+            if recent_decisions:
+                d = recent_decisions[0]
+                last_decision = {
+                    "topic": d.topic,
+                    "statement": d.statement,
+                    "source_event_id": d.source_event_id,
+                    "created_at": d.created_at,
+                }
+
+            continuity_open_loops = [
+                {
+                    "intent": loop.intent,
+                    "source_event_id": loop.source_event_id,
+                    "created_at": loop.created_at,
+                }
+                for loop in loops[:3]
+            ]
+            continuity_capsule = {
+                "current_time_context": {
+                    "generated_at": generated_at,
+                    "latest_event_at": latest_event_at,
+                    "relative_label": _relative_label(generated_at, latest_event_at),
+                },
+                "active_shared_work": narrative,
+                "last_decision": last_decision,
+                "open_loops": continuity_open_loops,
+                "source_event_ids": derived_from,
+                "suggested_next_action": continuity_open_loops[0]["intent"] if continuity_open_loops else "",
+            }
+
             digest = {
                 "identity": conventions,
                 "active_projects": [str(p) for p in active_projects],
                 "open_loops": top_loops,
                 "narrative": narrative,
+                "derived_from": derived_from,
+                "derived_at": generated_at,
+                "continuity_capsule": continuity_capsule,
             }
             ambient = Fact(
                 id="ambient-standing-context",
                 topic=AMBIENT_TOPIC,
                 statement=json.dumps(digest, sort_keys=True),
-                source_event_id=None,
+                source_event_id=headline_receipt,
                 repo_id=None,
                 tags=[AMBIENT_TAG],
             )

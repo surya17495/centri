@@ -1083,15 +1083,28 @@ class Ambient:
     active_projects: List[str] = field(default_factory=list)
     open_loops: List[str] = field(default_factory=list)
     narrative: str = ""
+    continuity_capsule: Dict[str, Any] = field(default_factory=dict)
+    # Receipt to the most recent spine event the digest was derived from, plus a
+    # bounded list of the source events it summarized — so the standing self is
+    # auditable back to the verbatim events that produced it (master plan §2.8).
     source_event_id: Optional[str] = None
+    derived_from: List[str] = field(default_factory=list)
+    derived_at: str = ""
 
     def is_empty(self) -> bool:
-        return not (self.user_profile or self.identity or self.active_projects or self.open_loops or self.narrative)
+        return not (
+            self.user_profile
+            or self.identity
+            or self.active_projects
+            or self.open_loops
+            or self.narrative
+            or self.continuity_capsule
+        )
 
     def render(self, budget: int, counter: Optional[TokenCounter] = None,
                cue_terms: Optional[set] = None) -> str:
         counter = counter or default_token_counter()
-        lines: List[str] = []
+        lines: List[str] = ["Standing self (continuity):"]
         if self.user_profile:
             lines.append("User Profile:")
             for k, v in self.user_profile.items():
@@ -1100,6 +1113,8 @@ class Ambient:
             lines.append("Who/conventions: " + "; ".join(self.identity))
         if self.active_projects:
             lines.append("Active: " + "; ".join(self.active_projects))
+        if self.narrative:
+            lines.append("Current work: " + self.narrative)
         if self.open_loops:
             ranked = list(self.open_loops)
             if cue_terms:
@@ -1109,7 +1124,26 @@ class Ambient:
                 )
             top = ranked[:3]
             lines.append("Top open loops: " + "; ".join(top))
+        capsule = self.continuity_capsule or {}
+        if capsule:
+            continuity_parts = []
+            time_ctx = capsule.get("current_time_context") or {}
+            relative = time_ctx.get("relative_label")
+            if relative:
+                continuity_parts.append(f"time={relative}")
+            last_decision = capsule.get("last_decision") or {}
+            if last_decision.get("topic") and last_decision.get("statement"):
+                continuity_parts.append(
+                    f"last decision={last_decision['topic']}: {last_decision['statement']}"
+                )
+            suggested_next = capsule.get("suggested_next_action")
+            if suggested_next:
+                continuity_parts.append(f"next={suggested_next}")
+            if continuity_parts:
+                lines.append("Continuity: " + "; ".join(continuity_parts))
         block = "\n".join(lines)
+        if block == "Standing self (continuity):":
+            block = ""
         # Trim to budget deterministically: drop whole words from the end until
         # the real token count fits. Word boundaries keep the trim readable while
         # the counter (not the word count) decides when we are under budget.
@@ -1157,7 +1191,10 @@ async def load_ambient(
                 active_projects=list(data.get("active_projects") or []),
                 open_loops=list(data.get("open_loops") or []),
                 narrative=str(data.get("narrative") or ""),
+                continuity_capsule=dict(data.get("continuity_capsule") or {}),
                 source_event_id=f.source_event_id,
+                derived_from=list(data.get("derived_from") or []),
+                derived_at=str(data.get("derived_at") or ""),
             )
     return Ambient(user_profile=user_profile)
 
@@ -1185,7 +1222,10 @@ def _suppress_ambient_legacy(ambient: Ambient) -> Ambient:
         active_projects=list(ambient.active_projects),
         open_loops=[s for s in ambient.open_loops if not _text_mentions_legacy(s)],
         narrative=ambient.narrative if not _text_mentions_legacy(ambient.narrative) else "",
+        continuity_capsule=dict(ambient.continuity_capsule),
         source_event_id=ambient.source_event_id,
+        derived_from=list(ambient.derived_from),
+        derived_at=ambient.derived_at,
     )
 
 
@@ -1510,6 +1550,163 @@ async def curate(
 
 
 # ---------------------------------------------------------------------------
+# Verbatim recall as a first-class turn capability (master plan §2.10)
+# ---------------------------------------------------------------------------
+@dataclass
+class VerbatimRecall:
+    """One exact, receipted recall of an original utterance from the spine.
+
+    Unlike the passive ``VerbatimMatch`` folded into a brief, this is the result
+    a TURN gets when it calls :func:`recall_verbatim` on demand. ``text`` is the
+    original wording byte-for-byte (never paraphrased/distilled); ``source_event_id``
+    is the receipt that resolves to the originating spine event; ``thread_id`` is
+    the session that event belongs to (so a cross-session recall is provable).
+    """
+
+    text: str
+    source_event_id: str
+    type: str
+    source: str
+    thread_id: Optional[str] = None
+
+
+def _verbatim_fts_query(query: str) -> str:
+    """Build an OR-of-quoted-terms FTS5 query, stripping operator characters.
+
+    Mirrors the cleaning ``curate()`` applies before ``search_events`` so a raw
+    user query can never inject FTS5 syntax (which would raise and silently drop
+    recall). An empty result means there were no usable terms.
+    """
+    clean_words = []
+    for word in (query or "").split():
+        w = word.replace('"', "").replace("*", "").replace(":", "").replace("-", "")
+        w = w.replace("+", "").replace("^", "").strip()
+        if w:
+            clean_words.append(f'"{w}"')
+    return " OR ".join(clean_words)
+
+
+async def recall_verbatim(
+    db: Any,
+    query: str,
+    *,
+    scope: str = "global",
+    limit: int = 5,
+    exclude_thread_id: Optional[str] = None,
+) -> List[VerbatimRecall]:
+    """On-demand exact recall of original utterances over the lossless spine.
+
+    This is the capability distillation-only incumbents structurally cannot offer
+    (master plan §2.10): the verbatim original is always present in the spine, so
+    exact recall is always *possible*. Reuses the existing FTS5 plumbing
+    (:meth:`Database.search_events`) and the same source-priority sort + legacy
+    filtering + dedup that ``curate()`` applies to its passive verbatim section —
+    no duplicate storage, no second index.
+
+    ``scope='global'`` searches the whole spine (memory is global; a session is a
+    view). ``exclude_thread_id`` drops matches from the calling session so a turn
+    pages in the OTHER sessions' originals, not its own already-in-context text.
+
+    Honest degradation (master plan §2.13): if the FTS5 query errors, fall back to
+    a LIKE scan; if that also fails, return ``[]`` (an honest empty result, never a
+    fabricated answer). The caller emits the auditable ``recall.verbatim`` event.
+    """
+    fts_query = _verbatim_fts_query(query)
+    if not fts_query:
+        return []
+
+    rows: List[Dict[str, Any]] = []
+    try:
+        rows = await db.search_events(fts_query, limit=max(limit * 3, limit))
+    except Exception:
+        logger.debug("recall_verbatim FTS search failed; trying LIKE fallback", exc_info=True)
+        rows = await _recall_verbatim_like(db, query, limit=max(limit * 3, limit))
+
+    matches: List[VerbatimRecall] = []
+    for r in rows:
+        thread_id = r.get("thread_id")
+        if exclude_thread_id and thread_id == exclude_thread_id:
+            continue
+        text = r.get("text") or ""
+        source = r.get("source") or ""
+        # Same obsolete-history filtering curate() applies: never surface a legacy
+        # system's text as a current verbatim recall.
+        if _is_legacy_source(source) or _text_mentions_legacy(text):
+            continue
+        matches.append(
+            VerbatimRecall(
+                text=text,
+                source_event_id=r.get("event_id") or r.get("id") or "",
+                type=r.get("type") or "",
+                source=source,
+                thread_id=thread_id,
+            )
+        )
+
+    # Dedup by first 200 chars (the same text appears under several event types).
+    seen: set = set()
+    deduped: List[VerbatimRecall] = []
+    for m in matches:
+        key = hash(m.text[:200])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(m)
+
+    # Source-priority sort: user utterances rank above assistant, above tool/system.
+    deduped.sort(key=lambda m: _verbatim_source_priority(m.source))
+    return deduped[:limit]
+
+
+async def _recall_verbatim_like(db: Any, query: str, *, limit: int) -> List[Dict[str, Any]]:
+    """LIKE-scan fallback when FTS5 is unavailable (honest degradation, §2.13).
+
+    Returns rows shaped like :meth:`Database.search_events` output so the caller is
+    agnostic to which path produced them. Excludes the memory system's own events
+    (``consolidation.*`` / ``memory.*``) exactly as the FTS path does.
+    """
+    terms = [w for w in (query or "").split() if w.strip()]
+    if not terms:
+        return []
+    likes = " OR ".join("events.payload_json LIKE ?" for _ in terms)
+    params = [f"%{t}%" for t in terms]
+    try:
+        cur = await db._execute(  # noqa: SLF001 — fallback path needs a raw scan
+            f"""
+            SELECT events.id AS event_id, events.type, events.source, events.thread_id,
+                   events.payload_json
+            FROM events
+            WHERE ({likes})
+              AND events.importance IN ('normal','high')
+              AND events.source NOT LIKE 'consolidation%'
+              AND events.source NOT LIKE 'memory%'
+            ORDER BY events.ts DESC
+            LIMIT ?
+            """,
+            (*params, limit),
+        )
+    except Exception:
+        logger.debug("recall_verbatim LIKE fallback failed", exc_info=True)
+        return []
+    out: List[Dict[str, Any]] = []
+    for row in cur.fetchall():
+        d = dict(row)
+        try:
+            payload = json.loads(d.get("payload_json") or "{}")
+        except Exception:
+            payload = {}
+        text = ""
+        for key in ("text", "content", "statement", "intent", "description", "message"):
+            val = payload.get(key)
+            if isinstance(val, str) and val.strip():
+                text = val
+                break
+        d["text"] = text
+        out.append(d)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Optional cue-expansion seam (honest-unavailable)
 # ---------------------------------------------------------------------------
 class CueExpander:
@@ -1624,6 +1821,9 @@ def curation_breakdown_payload(brief: CuratedBrief) -> Dict[str, Any]:
         "graph_high_water": brief.graph_high_water,
         "lines": brief.receipts(),
         "ambient_source_event_id": brief.ambient.source_event_id,
+        "ambient_derived_from": list(brief.ambient.derived_from),
+        "ambient_derived_at": brief.ambient.derived_at,
+        "ambient_continuity_capsule": dict(brief.ambient.continuity_capsule),
     }
 
 

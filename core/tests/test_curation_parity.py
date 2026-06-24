@@ -23,9 +23,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from centri.briefing import BriefingBuilder  # noqa: E402
 from centri.config import Settings  # noqa: E402
 from centri.coordinator import Coordinator  # noqa: E402
-from centri.curation import Curator  # noqa: E402
+from centri.curation import AMBIENT_TAG, AMBIENT_TOPIC, Curator  # noqa: E402
 from centri.db import Database  # noqa: E402
 from centri.memory_graph import STANCE_ADOPTED, STANCE_REJECTED, Decision, Fact, MemoryGraph  # noqa: E402
 from centri.permissions import Permissions  # noqa: E402
@@ -100,6 +101,44 @@ async def _seed(g: MemoryGraph) -> None:
         id="f1", topic="testing", statement="integration tests hit a real database, never mocks",
         source_event_id="evt-f1", created_at="2026-01-03T00:00:00+00:00", tags=["convention"],
     ))
+    await g.add_fact(Fact(
+        id="ambient-1",
+        topic=AMBIENT_TOPIC,
+        statement=json.dumps({
+            "identity": ["build small, test, then push"],
+            "active_projects": ["centri"],
+            "open_loops": ["wire standing-self receipts into runtime hydration"],
+            "narrative": "Current work is Centri continuity.",
+            "continuity_capsule": {
+                "current_time_context": {
+                    "generated_at": "2026-06-21T03:30:00+00:00",
+                    "latest_event_at": "2026-01-03T00:00:00+00:00",
+                    "relative_label": "previous work",
+                },
+                "active_shared_work": "Current work is Centri continuity.",
+                "last_decision": {
+                    "topic": "jwt refresh",
+                    "statement": "adopt rotating refresh tokens",
+                    "source_event_id": "evt-d1",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                },
+                "open_loops": [
+                    {
+                        "intent": "wire standing-self receipts into runtime hydration",
+                        "source_event_id": "evt-f1",
+                        "created_at": "2026-01-03T00:00:00+00:00",
+                    },
+                ],
+                "source_event_ids": ["evt-d1", "evt-f1"],
+                "suggested_next_action": "wire standing-self receipts into runtime hydration",
+            },
+            "derived_from": ["evt-d1", "evt-f1"],
+            "derived_at": "2026-06-21T03:30:00+00:00",
+        }),
+        source_event_id="evt-ambient-highwater",
+        created_at="2026-06-21T03:30:00+00:00",
+        tags=[AMBIENT_TAG],
+    ))
 
 
 async def _events_of(db, type_):
@@ -117,7 +156,7 @@ async def _events_of(db, type_):
     return out
 
 
-def _make_coordinator(db, graph, *, jobs=None, autonomy="autonomous_local"):
+def _make_coordinator(db, graph, *, jobs=None, autonomy="autonomous_local", briefing_builder=None):
     return Coordinator(
         db=db,
         model_router=_StubModelRouter(),
@@ -129,7 +168,7 @@ def _make_coordinator(db, graph, *, jobs=None, autonomy="autonomous_local"):
         artifacts=None,
         event_bus=None,
         hot_cache=_ColdCache(),
-        briefing_builder=None,
+        briefing_builder=briefing_builder,
         memory_brief=None,
         curator=Curator(graph),
     )
@@ -202,6 +241,55 @@ class TestCurationParity:
         chat_d1 = next(r for r in chat_receipts if r["key"] == "decision:d1")
         deleg_d1 = next(r for r in deleg_receipts if r["key"] == "decision:d1")
         assert chat_d1["source_event_id"] == deleg_d1["source_event_id"] == "evt-d1"
+
+    async def test_both_paths_stamp_standing_self_derivation_receipts(self, graph_db):
+        """The ambient standing-self is part of runtime hydration, not a hidden
+        summary blob: chat turns and delegation/spawn briefs both stamp the same
+        ambient high-water receipt and bounded derivation receipts on the
+        ``curation.brief`` event, so either path can expand the standing-self back
+        to verbatim source events.
+        """
+        db, g = graph_db
+        await _seed(g)
+        coord = _make_coordinator(db, g)
+
+        await coord._curate_chat_context(ContextPacket(), "jwt refresh", chat_thread="thread-chat")
+        await coord.build_delegation_brief(ContextPacket(), "jwt refresh")
+
+        briefs = await _events_of(db, "curation.brief")
+        by_kind = {b["payload"]["turn_kind"]: b["payload"] for b in briefs}
+        assert set(by_kind) == {"chat", "delegation"}
+
+        for payload in by_kind.values():
+            assert payload["ambient_source_event_id"] == "evt-ambient-highwater"
+            assert payload["ambient_derived_from"] == ["evt-d1", "evt-f1"]
+            assert payload["ambient_derived_at"] == "2026-06-21T03:30:00+00:00"
+            capsule = payload["ambient_continuity_capsule"]
+            assert capsule["current_time_context"]["relative_label"] == "previous work"
+            assert capsule["last_decision"]["source_event_id"] == "evt-d1"
+            assert capsule["source_event_ids"] == ["evt-d1", "evt-f1"]
+            assert capsule["suggested_next_action"] == (
+                "wire standing-self receipts into runtime hydration"
+            )
+
+    async def test_delegation_handoff_preserves_standing_self_preamble(self, graph_db):
+        """Spawned/coding hands receive continuity as an explicit preamble.
+
+        The curation path already computes the standing self; this verifies the
+        final hands-facing prompt preserves it by name instead of burying it in a
+        generic, truncated recall bullet.
+        """
+        db, g = graph_db
+        await _seed(g)
+        coord = _make_coordinator(db, g, briefing_builder=BriefingBuilder(max_chars=2500))
+
+        briefing = await coord.build_delegation_brief(ContextPacket(), "continue jwt refresh work")
+
+        assert "Relevant memory:" in briefing
+        assert "Standing self (continuity):" in briefing
+        assert "Current work: Current work is Centri continuity." in briefing
+        assert "Continuity: time=previous work" in briefing
+        assert "next=wire standing-self receipts into runtime hydration" in briefing
 
     async def test_coding_turn_emits_exactly_one_brief_no_double_count(self, graph_db):
         """A coding-intent utterance must curate ONCE on the delegation side and

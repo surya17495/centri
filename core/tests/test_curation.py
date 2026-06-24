@@ -290,6 +290,7 @@ class TestAmbient:
         amb = await load_ambient(graph)
         assert not amb.is_empty()
         rendered = amb.render(280)
+        assert rendered.startswith("Standing self (continuity):")
         assert "centri" in rendered and "jwt rotation" in rendered
         assert amb.source_event_id == "evt-amb"
 

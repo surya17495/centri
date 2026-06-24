@@ -25,6 +25,12 @@ T = TypeVar("T")
 _EMBED_CACHE: Dict[str, List[float]] = {}
 _EMBED_LIFETIME_SECONDS = 600
 
+# litellm provider prefixes we route through. A model id whose leading segment
+# is one of these is ALREADY provider-prefixed (e.g. ``openai/Qwen/...``) and
+# must never be re-prefixed; a leading segment outside this set is a model org
+# (e.g. ``Qwen/...``) that litellm cannot route on a custom base without one.
+_KNOWN_PROVIDER_PREFIXES = frozenset({"openai", "nebius", "anthropic", "azure", "vertex_ai", "gemini", "mistral", "cohere", "groq", "together_ai", "bedrock", "ollama", "fireworks_ai"})
+
 
 @dataclass(frozen=True)
 class ResolvedModel:
@@ -208,7 +214,7 @@ class ModelRouter:
         """
         if not self._litellm_base_url:
             return model
-        if self._has_supported_provider_prefix(model):
+        if self._has_known_provider_prefix(model):
             return model
         logger.debug(
             "ModelRouter prefixing embedding model %r -> openai/%s for custom base URL",
@@ -216,6 +222,19 @@ class ModelRouter:
             model,
         )
         return f"openai/{model}"
+
+    def _has_known_provider_prefix(self, model: str) -> bool:
+        """True when the model's leading segment is a routable litellm provider.
+
+        Unlike ``_has_supported_provider_prefix`` (which gates on configured
+        credentials for DIRECT routing), this is credential-independent: in
+        proxy/custom-base mode the key+base come from the gateway, so
+        ``openai/Qwen/...`` is already correctly prefixed regardless of whether
+        an ``openai`` key is configured locally.
+        """
+        if "/" not in model:
+            return False
+        return model.split("/", 1)[0] in _KNOWN_PROVIDER_PREFIXES
 
     def _looks_like_openai_model(self, model: str) -> bool:
         prefixes = ("gpt-", "o1", "o3", "o4", "text-embedding-", "omni-")
