@@ -34,6 +34,7 @@ dependency now.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -50,6 +51,7 @@ from centri.memory_graph import (
     Fact,
     MemoryGraph,
     OpenLoop,
+    RESERVED_FACT_TOPICS,
 )
 
 # Bump when the curation policy changes in a way that alters briefs. Golden
@@ -917,7 +919,11 @@ def _render_item(c: Candidate, detail: str) -> str:
 # Candidate extraction from the graph snapshot
 # ---------------------------------------------------------------------------
 async def gather_candidates(
-    graph: MemoryGraph, cue: Cue, repo_id: Optional[str]
+    graph: MemoryGraph,
+    cue: Cue,
+    repo_id: Optional[str],
+    *,
+    facts: Optional[Any] = None,
 ) -> List[Candidate]:
     """Pull the live (non-superseded) graph items as scorable candidates.
 
@@ -928,7 +934,25 @@ async def gather_candidates(
     await graph.ensure_tables()
     cands: List[Candidate] = []
 
-    for d in await graph.current_decisions(repo_id=repo_id):
+    if facts is None:
+        decisions, facts_source, loops = await asyncio.gather(
+            graph.current_decisions(repo_id=repo_id),
+            graph.current_facts(repo_id=repo_id),
+            graph.open_loops(repo_id=repo_id, states=[LOOP_OPEN]),
+        )
+    else:
+        if hasattr(facts, "__await__"):
+            facts_list = await facts
+        else:
+            facts_list = facts
+
+        decisions, loops = await asyncio.gather(
+            graph.current_decisions(repo_id=repo_id),
+            graph.open_loops(repo_id=repo_id, states=[LOOP_OPEN]),
+        )
+        facts_source = [f for f in facts_list if f.topic not in RESERVED_FACT_TOPICS]
+
+    for d in decisions:
         item_type = "rejection" if d.stance == STANCE_REJECTED else "decision"
         text = d.statement + (f" — {d.rationale}" if d.rationale else "")
         cands.append(
@@ -946,7 +970,7 @@ async def gather_candidates(
             )
         )
 
-    for f in await graph.current_facts(repo_id=repo_id):
+    for f in facts_source:
         # Aliases are cue infrastructure; the ambient digest is its own layer.
         # Neither is a cued candidate.
         if "alias" in f.tags or AMBIENT_TAG in f.tags:
@@ -968,7 +992,7 @@ async def gather_candidates(
         )
 
     cue_terms = cue.term_set()
-    for loop in await graph.open_loops(repo_id=repo_id, states=[LOOP_OPEN]):
+    for loop in loops:
         hay = set(_tokens(loop.intent) + _tokens(loop.cue) + [t.lower() for t in loop.tags])
         cands.append(
             Candidate(
@@ -1055,7 +1079,12 @@ class Ambient:
         return block
 
 
-async def load_ambient(graph: MemoryGraph, repo_id: Optional[str] = None) -> Ambient:
+async def load_ambient(
+    graph: MemoryGraph,
+    repo_id: Optional[str] = None,
+    *,
+    facts: Optional[Any] = None,
+) -> Ambient:
     """Read the consolidation-maintained ambient digest from the graph."""
     await graph.ensure_tables()
     try:
@@ -1063,7 +1092,15 @@ async def load_ambient(graph: MemoryGraph, repo_id: Optional[str] = None) -> Amb
     except Exception:
         user_profile = {}
 
-    for f in await graph.current_facts(repo_id=repo_id, include_reserved=True):
+    if facts is not None:
+        if hasattr(facts, "__await__"):
+            facts_list = await facts
+        else:
+            facts_list = facts
+    else:
+        facts_list = await graph.current_facts(repo_id=repo_id, include_reserved=True)
+
+    for f in facts_list:
         if f.topic == AMBIENT_TOPIC and AMBIENT_TAG in f.tags:
             try:
                 data = json.loads(f.statement)
@@ -1222,17 +1259,28 @@ async def graph_high_water(graph: MemoryGraph) -> str:
 
     Stamped on the brief so a replay can prove which graph state produced it.
     """
-    hw = ""
-    for d in await graph.current_decisions():
-        if d.created_at > hw:
-            hw = d.created_at
-    for f in await graph.current_facts():
-        if f.created_at > hw:
-            hw = f.created_at
-    for loop in await graph.open_loops(states=[LOOP_OPEN]):
-        if loop.created_at > hw:
-            hw = loop.created_at
-    return hw
+    await graph.ensure_tables()
+    rows = await graph._db._execute("""
+        SELECT MAX(created_at) AS hw FROM (
+            SELECT created_at FROM mem_decisions WHERE superseded_by IS NULL
+            UNION ALL
+            SELECT created_at FROM mem_facts WHERE superseded_by IS NULL
+            UNION ALL
+            SELECT created_at FROM mem_open_loops WHERE LOWER(state) IN ('open', 'dormant')
+        )
+    """)
+    if rows and rows[0]["hw"]:
+        return rows[0]["hw"]
+    return ""
+
+
+def _build_fts_query(raw: str) -> str:
+    clean_words = []
+    for word in raw.split():
+        w = word.replace('"', '').replace('*', '').replace(':', '').replace('-', '').replace('+', '').replace('^', '').strip()
+        if w:
+            clean_words.append(f'"{w}"')
+    return " OR ".join(clean_words)
 
 
 async def curate(
@@ -1261,113 +1309,118 @@ async def curate(
     embedding_provider = embedding_provider or NullEmbeddingProvider()
     repo_id = repo_id if repo_id is not None else cue.repo_id
 
-    ambient = await load_ambient(graph, repo_id=repo_id)
-    # Filter obsolete HAL/Hermes/mempalace/Hindsight history from the ambient header
-    # (User Profile / Who/conventions / Top open loops / Recent memory) unless
-    # the cue is asking about them. Maintain current context relevance by default.
-    # Mirrors gather_candidates' tag filter for the cued section; the stored digest
-    # rows stay as audit history.
+    facts_task = asyncio.create_task(
+        graph.current_facts(repo_id=repo_id, include_reserved=True)
+    )
+    ambient_task = asyncio.create_task(
+        load_ambient(graph, repo_id=repo_id, facts=facts_task)
+    )
+    candidates_task = asyncio.create_task(
+        gather_candidates(graph, cue, repo_id, facts=facts_task)
+    )
+
+    ambient = await ambient_task
+    candidates = await candidates_task
+
     if not _cue_asks_for_legacy(cue):
         ambient = _suppress_ambient_legacy(ambient)
-    candidates = await gather_candidates(graph, cue, repo_id)
+
     ranked = Ranker(weights).rank(cue, candidates)
     lines = Budgeter(budget, counter).select(ranked)
 
-    if cue.raw:
-        clean_words = []
-        for word in cue.raw.split():
-            w = word.replace('"', '').replace('*', '').replace(':', '').replace('-', '').replace('+', '').replace('^', '').strip()
-            if w:
-                clean_words.append(f'"{w}"')
-        fts_query = " OR ".join(clean_words)
-        if fts_query:
-            raw_events = []
+    # Run photographic + verbatim FTS recall concurrently
+    async def _photographic_recall() -> List[Dict[str, Any]]:
+        if not cue.raw:
+            return []
+        fts_query = _build_fts_query(cue.raw)
+        try:
+            rows = await graph._db._execute(
+                """
+                SELECT events.id, events.type, events.source, events.ts, events.payload_json
+                FROM event_fts
+                JOIN events ON events.rowid = event_fts.rowid
+                WHERE event_fts MATCH ?
+                  AND events.source NOT LIKE 'consolidation%'
+                  AND events.source NOT LIKE 'memory%'
+                ORDER BY bm25(event_fts) ASC
+                LIMIT 5
+                """,
+                (fts_query,),
+            )
+            return [dict(row) for row in rows]
+        except Exception as e:
+            logger.warning("FTS recall fallback failed, trying LIKE query: %s", e)
             try:
-                cur = await graph._db._execute(
+                rows = await graph._db._execute(
                     """
-                    SELECT events.id, events.type, events.source, events.ts, events.payload_json
-                    FROM event_fts
-                    JOIN events ON events.rowid = event_fts.rowid
-                    WHERE event_fts MATCH ?
-                      AND events.source NOT LIKE 'consolidation%'
-                      AND events.source NOT LIKE 'memory%'
-                    ORDER BY bm25(event_fts) ASC
+                    SELECT id, type, source, ts, payload_json
+                    FROM events
+                    WHERE payload_json LIKE ?
+                      AND source NOT LIKE 'consolidation%'
+                      AND source NOT LIKE 'memory%'
                     LIMIT 5
                     """,
-                    (fts_query,),
+                    (f"%{cue.raw}%",),
                 )
-                raw_events = [dict(row) for row in cur]
-            except Exception as e:
-                logger.warning("FTS recall fallback failed, trying LIKE query: %s", e)
-                try:
-                    cur = await graph._db._execute(
-                        """
-                        SELECT id, type, source, ts, payload_json
-                        FROM events
-                        WHERE payload_json LIKE ?
-                          AND source NOT LIKE 'consolidation%'
-                          AND source NOT LIKE 'memory%'
-                        LIMIT 5
-                        """,
-                        (f"%{cue.raw}%",),
-                    )
-                    raw_events = [dict(row) for row in cur]
-                except Exception as e2:
-                    logger.error("LIKE fallback also failed: %s", e2)
-            
-            for ev in raw_events:
-                payload_str = ev.get("payload_json", "{}")
-                try:
-                    payload = json.loads(payload_str)
-                except Exception:
-                    payload = {}
-                
-                text_val = ""
-                for key in ("text", "content", "message", "stdout", "output", "summary", "line"):
-                    val = payload.get(key)
-                    if isinstance(val, str) and val.strip():
-                        text_val = val.strip()
-                        break
-                if not text_val:
-                    text_val = json.dumps(payload)
-                
-                lines.append(
-                    BriefLine(
-                        section="photographic_recall",
-                        text=text_val,
-                        detail="full",
-                        score=1.0,
-                        breakdown={"fts_score": 1.0},
-                        source_event_id=ev.get("id"),
-                        key=f"photo-{ev.get('id')}",
-                    )
-                )
+                return [dict(row) for row in rows]
+            except Exception as e2:
+                logger.error("LIKE fallback also failed: %s", e2)
+                return []
 
-    hw = await graph_high_water(graph)
+    async def _verbatim_recall() -> List[Dict[str, Any]]:
+        if not cue.raw:
+            return []
+        fts_query = _build_fts_query(cue.raw)
+        try:
+            return await graph._db.search_events(fts_query, limit=5)
+        except Exception:
+            return []
 
-    verbatim = []
-    if cue.raw:
-        clean_words = []
-        for word in cue.raw.split():
-            w = word.replace('"', '').replace('*', '').replace(':', '').replace('-', '').replace('+', '').replace('^', '').strip()
-            if w:
-                clean_words.append(f'"{w}"')
-        fts_query = " OR ".join(clean_words)
-        if fts_query:
-            try:
-                results = await graph._db.search_events(fts_query, limit=5)
-                for r in results:
-                    verbatim.append(
-                        VerbatimMatch(
-                            text=r["text"],
-                            type=r["type"],
-                            source=r["source"],
-                            event_id=r["event_id"],
-                            thread_id=r.get("thread_id"),
-                        )
-                    )
-            except Exception:
-                pass
+    async def _high_water():
+        return await graph_high_water(graph)
+
+    photo_events, verbatim_results, hw = await asyncio.gather(
+        _photographic_recall(), _verbatim_recall(), _high_water()
+    )
+
+    for ev in photo_events:
+        payload_str = ev.get("payload_json", "{}")
+        try:
+            payload = json.loads(payload_str)
+        except Exception:
+            payload = {}
+        
+        text_val = ""
+        for key in ("text", "content", "message", "stdout", "output", "summary", "line"):
+            val = payload.get(key)
+            if isinstance(val, str) and val.strip():
+                text_val = val.strip()
+                break
+        if not text_val:
+            text_val = json.dumps(payload)
+        
+        lines.append(
+            BriefLine(
+                section="photographic_recall",
+                text=text_val,
+                detail="full",
+                score=1.0,
+                breakdown={"fts_score": 1.0},
+                source_event_id=ev.get("id"),
+                key=f"photo-{ev.get('id')}",
+            )
+        )
+
+    verbatim = [
+        VerbatimMatch(
+            text=r["text"],
+            type=r["type"],
+            source=r["source"],
+            event_id=r["event_id"],
+            thread_id=r.get("thread_id"),
+        )
+        for r in verbatim_results
+    ]
 
     # Exclude verbatim matches from the current thread — they are already in
     # context (circular recall). Also apply obsolete-history filtering.
