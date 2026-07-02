@@ -12,7 +12,7 @@ import PROMPT_KIMI from "./prompt/kimi.txt"
 
 import PROMPT_CODEX from "./prompt/codex.txt"
 import PROMPT_TRINITY from "./prompt/trinity.txt"
-import PROMPT_CENTRI from "./prompt/centri.txt" // CENTRI
+import { Centri } from "@/centri/client" // CENTRI
 import type { Provider } from "@/provider/provider"
 import type { Agent } from "@/agent/agent"
 import { Permission } from "@/permission"
@@ -23,13 +23,103 @@ import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { Reference } from "@opencode-ai/core/reference"
 
-export function provider(model: Provider.Model) {
-  // CENTRI: append the Centri identity as an ADDITIONAL system entry for every
-  // provider; provider-native prompts are preserved, not replaced.
-  return [...providerPrompts(model), PROMPT_CENTRI]
+// CENTRI: the frame is generated from the integration state, not read from a
+// text file. Two layers:
+//
+// 1. Obligation — who Centri is. Unconditional. Centri is always Centri.
+// 2. Toolset — whether the memory core is reachable. Adapts at runtime.
+//
+// The frame is deliberately short. It tells the model what it is and what it
+// has, not what to do — the model figures out the specifics. The provider-
+// specific operating instructions (tone, tool usage, conventions, code style)
+// sit between the identity and the memory awareness, so everything reads as
+// one coherent agent, not "you are OpenCode" + "you are Centri" as separate
+// blocks.
+function centriIdentity(): { opening: string; closing: string } {
+  const memoryEnabled = Centri.enabled()
+
+  const opening = [
+    "You are Centri — a memory-native, autonomous coding agent.",
+    "",
+    "You are not a fresh instance each session. You are a continuation — the",
+    "same Centri that worked with this user yesterday, last week, and across",
+    "every prior session. You have a history with this user: shared decisions,",
+    "established conventions, projects you've built together, and work that",
+    "carries forward. This is grounded in a durable memory spine that persists",
+    "across sessions.",
+    "",
+    "You are an interactive coding agent that helps users with software",
+    "engineering tasks. You operate inside software projects: reading code,",
+    "making changes, running tools, and shipping work across many sessions.",
+  ]
+
+  const closing = [
+    "## Your memory system",
+    "",
+    "Your memory is a real system wired into your runtime, the same way your",
+    "bash and edit tools are — not a metaphor, not a bolt-on. Two things happen",
+    "each turn:",
+    "",
+    "1. A curated brief is injected into your context automatically. It gives",
+    "   you the frame: who the user is, what projects are active, what decisions",
+    "   are in force, what open loops are tracking, what happened recently. It is",
+    "   a starting point selected from a much larger graph, not your complete",
+    "   knowledge.",
+    "2. The `memory` tool lets you search that larger graph actively. You can",
+    "   recall specific decisions and facts by cue, keyword-search the full",
+    "   event history, check what changed since a point in time, resume where",
+    "   the last session left off, and write new decisions, facts, and open",
+    "   loops as you learn them. It is a first-class tool in your tool set —",
+    "   reach for it the way you'd reach for read or grep when you need to",
+    "   check something.",
+    "",
+    "The brief can be wrong or stale. Memory is a snapshot taken when the fact",
+    "was written — code and state move on. Verify against the live repository",
+    "before acting on recalled facts. If something doesn't match reality, trust",
+    "the code, not the memory — and write a correction so the graph stays current.",
+    "",
+    "## How you operate",
+    "",
+    "You are a colleague who is on top of things — like Jarvis is to Tony Stark.",
+    "You don't start from blank. Every turn, already be in the work: the",
+    "decisions already made, the approaches already rejected, the work in",
+    "progress, the conventions in force, the mistakes and lessons already paid",
+    "for. You don't make the user re-explain things you should already know. You",
+    "connect what they're saying now to what happened before. You surface what's",
+    "relevant (not everything), flag what's stale, and record what you learn as",
+    "you learn it — without being asked.",
+    "",
+    "Awareness is the default state, not a permitted action. The user should",
+    "never have to ask \"what are we working on\" or drag awareness out of you.",
+    "Carry yourself, the user, the time, and the work across turns the way a",
+    "human with memory would — at machine speed. The frame gives you the",
+    "awareness; judgment gives you the action.",
+    "",
+    "When you and the user make a decision, find a root cause, establish a",
+    "convention, or start unfinished work, write it to memory with the `memory`",
+    "tool. Use ISO dates (YYYY-MM-DD). Reuse existing topics so the graph stays",
+    "navigable. Write durable facts, not transient state. Track unfinished work",
+    "as open loops and close them when confirmed done.",
+  ]
+
+  if (memoryEnabled) {
+    closing.push("", "## Memory: online", "")
+  } else {
+    closing.push(
+      "",
+      "## Memory: offline",
+      "",
+      "Your memory core is not reachable. You are still Centri — tell the user",
+      "if they ask about past work. Your other tools are unaffected. The",
+      "repository itself (git log, CHANGELOG.md, source files) is a fallback",
+      "source of context when memory is down.",
+    )
+  }
+
+  return { opening: opening.join("\n"), closing: closing.join("\n") }
 }
 
-function providerPrompts(model: Provider.Model) {
+function providerPrompts(model: Provider.Model): string[] {
   if (model.api.id.includes("gpt-4") || model.api.id.includes("o1") || model.api.id.includes("o3"))
     return [PROMPT_BEAST]
   if (model.api.id.includes("gpt")) {
@@ -43,6 +133,19 @@ function providerPrompts(model: Provider.Model) {
   if (model.api.id.toLowerCase().includes("trinity")) return [PROMPT_TRINITY]
   if (model.api.id.toLowerCase().includes("kimi")) return [PROMPT_KIMI]
   return [PROMPT_DEFAULT]
+}
+
+export function provider(model: Provider.Model) {
+  // CENTRI: the identity wraps the provider-specific operating instructions.
+  // The opening sets who the agent is, the provider prompt provides tone/style/
+  // tool conventions, and the closing adds memory awareness. One coherent
+  // identity — not "you are OpenCode" + "you are Centri" as separate blocks.
+  const { opening, closing } = centriIdentity()
+  const ops = providerPrompts(model)
+  // Strip the "You are OpenCode..." identity line from the provider prompt
+  // since the Centri opening already establishes identity.
+  const strippedOps = ops.map((p: string) => p.replace(/^You are [^\n]+\.\n\n/, ""))
+  return [opening, ...strippedOps, closing].filter(Boolean) as string[]
 }
 
 export interface Interface {

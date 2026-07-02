@@ -8,6 +8,7 @@
 //   CENTRI_TOKEN  bearer token (maps to core's CENTRI_AUTH_TOKEN)
 
 const RECALL_TIMEOUT_MS = Number(process.env["CENTRI_RECALL_TIMEOUT_MS"] ?? 3000)
+const SEARCH_TIMEOUT_MS = Number(process.env["CENTRI_SEARCH_TIMEOUT_MS"] ?? 5000)
 const IMPORT_TIMEOUT_MS = 5000
 const FLUSH_INTERVAL_MS = 2000
 const FLUSH_MAX_EVENTS = 50
@@ -96,7 +97,7 @@ export async function recall(cue: string, opts?: RecallOptions): Promise<RecallR
         cue,
         thread_id: opts?.threadID,
         repo_id: opts?.repoID,
-        budget_tokens: opts?.budgetTokens ?? 1200,
+        budget_tokens: opts?.budgetTokens ?? 5000,
         format: "markdown+items",
       }),
     })
@@ -109,6 +110,133 @@ export async function recall(cue: string, opts?: RecallOptions): Promise<RecallR
   } finally {
     clearTimeout(timer)
   }
+}
+
+// Read path. Full-text search over the event spine (FTS5). Returns undefined
+// on any failure — fail-open, never blocks the agent.
+export type SearchResult = {
+  event_id: string
+  type: string
+  ts: string
+  payload: Record<string, unknown>
+  snippet?: string
+}
+
+export async function search(query: string, opts?: { limit?: number }): Promise<SearchResult[] | undefined> {
+  const base = baseUrl()
+  if (!base || !query.trim()) return undefined
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS)
+
+  try {
+    const res = await fetch(`${base}/memory/search`, {
+      method: "POST",
+      headers: headers(),
+      signal: controller.signal,
+      body: JSON.stringify({ query, limit: opts?.limit ?? 20 }),
+    })
+    if (!res.ok) return undefined
+    return (await res.json()) as SearchResult[]
+  } catch {
+    return undefined
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+// Read path. Temporal "what changed since X" narrative. Returns undefined on
+// failure — fail-open.
+export type SinceResult = {
+  available: boolean
+  reason?: string
+  narrative?: string
+  events?: Record<string, unknown>[]
+}
+
+export async function since(when: string, opts?: { repoID?: string }): Promise<SinceResult | undefined> {
+  const base = baseUrl()
+  if (!base) return undefined
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS)
+  const params = new URLSearchParams({ since: when })
+  if (opts?.repoID) params.set("repo_id", opts.repoID)
+
+  try {
+    const res = await fetch(`${base}/memory/since?${params}`, {
+      method: "GET",
+      headers: headers(),
+      signal: controller.signal,
+    })
+    if (!res.ok) return undefined
+    return (await res.json()) as SinceResult
+  } catch {
+    return undefined
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+// Read path. "Where did we leave off" resume view. Returns undefined on failure.
+export type WhereLeftOffResult = {
+  available: boolean
+  reason?: string
+  narrative?: string
+  [key: string]: unknown
+}
+
+export async function whereLeftOff(opts?: { repoID?: string }): Promise<WhereLeftOffResult | undefined> {
+  const base = baseUrl()
+  if (!base) return undefined
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS)
+  const params = new URLSearchParams()
+  if (opts?.repoID) params.set("repo_id", opts.repoID)
+
+  try {
+    const res = await fetch(`${base}/memory/where-left-off${params.size ? `?${params}` : ""}`, {
+      method: "GET",
+      headers: headers(),
+      signal: controller.signal,
+    })
+    if (!res.ok) return undefined
+    return (await res.json()) as WhereLeftOffResult
+  } catch {
+    return undefined
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+// Write path. Emits an event with explicit synthesis hints so the deterministic
+// consolidation tier picks it up immediately on the next 30s tick — no LLM call
+// needed. The hint structure matches what Consolidator.consume_events expects.
+export type MemoryWrite =
+  | { kind: "decision"; topic: string; statement: string; stance?: "adopted" | "rejected"; rationale?: string; tags?: string[] }
+  | { kind: "fact"; topic: string; statement: string; tags?: string[] }
+  | { kind: "open_loop"; intent: string; cue?: string; tags?: string[] }
+  | { kind: "loop_resolution"; intent: string; resolution?: "done" | "parked" }
+
+export function writeMemory(
+  write: MemoryWrite,
+  opts?: { threadID?: string; repoID?: string },
+): void {
+  if (!enabled()) return
+  const eventUID = `mem-write-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const ts = new Date().toISOString()
+  const payload: Record<string, unknown> & { event_uid: string } = { event_uid: eventUID }
+  payload[write.kind] = write
+  const envelope: Envelope = {
+    type: `centri_app.memory_write`,
+    ts,
+    source: "centri-app",
+    thread_id: opts?.threadID,
+    repo_id: opts?.repoID,
+    payload: payload as Record<string, unknown> & { event_uid: string },
+  }
+  importEvents(envelope)
 }
 
 // Write path. Batched, fire-and-forget. Events accumulate and flush every 2s or

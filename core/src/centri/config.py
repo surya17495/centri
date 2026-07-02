@@ -102,10 +102,10 @@ class Settings:
     # never wall-clock/randomness. Budget is in approximate tokens (words).
     # curation_cue_expansion names an optional LLM cue-expansion model role;
     # empty (default) = honest-unavailable, deterministic builder runs.
-    curation_budget_total: int = 900
-    curation_budget_ambient: int = 280
-    curation_floor_decisions: int = 120
-    curation_floor_rejections: int = 60
+    curation_budget_total: int = 5000
+    curation_budget_ambient: int = 1200
+    curation_floor_decisions: int = 400
+    curation_floor_rejections: int = 200
     curation_w_overlap: float = 1.0
     curation_w_type_prior: float = 0.6
     curation_w_open_loop: float = 0.5
@@ -224,10 +224,10 @@ class Settings:
             ingest_disabled_agents=os.getenv("CENTRI_INGEST_DISABLED_AGENTS", ""),
             acp_command=os.getenv("CENTRI_ACP_COMMAND", "opencode acp"),
             acp_opencode_command=os.getenv("CENTRI_ACP_OPENCODE_COMMAND", "opencode acp"),
-            curation_budget_total=int(os.getenv("CENTRI_CURATION_BUDGET_TOTAL", "900")),
-            curation_budget_ambient=int(os.getenv("CENTRI_CURATION_BUDGET_AMBIENT", "280")),
-            curation_floor_decisions=int(os.getenv("CENTRI_CURATION_FLOOR_DECISIONS", "120")),
-            curation_floor_rejections=int(os.getenv("CENTRI_CURATION_FLOOR_REJECTIONS", "60")),
+            curation_budget_total=int(os.getenv("CENTRI_CURATION_BUDGET_TOTAL", "5000")),
+            curation_budget_ambient=int(os.getenv("CENTRI_CURATION_BUDGET_AMBIENT", "1200")),
+            curation_floor_decisions=int(os.getenv("CENTRI_CURATION_FLOOR_DECISIONS", "400")),
+            curation_floor_rejections=int(os.getenv("CENTRI_CURATION_FLOOR_REJECTIONS", "200")),
             curation_w_overlap=float(os.getenv("CENTRI_CURATION_W_OVERLAP", "1.0")),
             curation_w_type_prior=float(os.getenv("CENTRI_CURATION_W_TYPE_PRIOR", "0.6")),
             curation_w_open_loop=float(os.getenv("CENTRI_CURATION_W_OPEN_LOOP", "0.5")),

@@ -185,6 +185,20 @@ class Consolidator:
             await self._refresh_ambient()
         return written
 
+    # Profile keys that carry durable identity context (not ephemeral session state).
+    # These are surfaced in the ambient frame so every session starts with
+    # awareness of who the user is and what they care about. Keys not in this
+    # set are still searchable via the memory tool but don't clutter the frame.
+    _AMBIENT_PROFILE_KEYS = frozenset({
+        "active_projects",
+        "active_work",
+        "current_focus",
+        "github_user",
+        "professional_background",
+        "centri_direction",
+        "communication_style",
+    })
+
     async def _refresh_ambient(self) -> None:
         """Recompute the ambient standing-context digest from the live graph.
 
@@ -201,17 +215,36 @@ class Consolidator:
             facts = await self._graph.current_facts()
             loops = await self._graph.open_loops()
 
+            try:
+                profile = await self._graph.get_profile()
+            except Exception:
+                profile = {}
+
             conventions = [f"{f.topic}: {f.statement}" for f in facts if "convention" in f.tags][:5]
             adopted = [d for d in decisions if d.stance == STANCE_ADOPTED]
             active_projects = sorted({d.repo_id for d in adopted if d.repo_id})[:5]
+            # Supplement with profile-declared projects
+            prof_projects = profile.get("active_projects", "")
+            if prof_projects:
+                for p in prof_projects.split(","):
+                    p = p.strip()
+                    if p and p not in active_projects:
+                        active_projects.append(p)
             top_loops = [loop.intent[:80] for loop in loops][:5]
+
+            # Build a compact profile snapshot — only durable identity keys
+            profile_snapshot = {}
+            for key in self._AMBIENT_PROFILE_KEYS:
+                val = profile.get(key)
+                if val and str(val).strip():
+                    profile_snapshot[key] = str(val).strip()[:300]
+
             # Build a rolling current-work summary from the most recent items
             recent_decisions = sorted(adopted, key=lambda d: d.created_at or "", reverse=True)[:5]
             narrative_parts = []
             if recent_decisions:
                 narrative_parts.append("Recently:")
                 for d in recent_decisions:
-                    # Show the topic and first 100 chars of statement
                     stmt = d.statement[:100].replace("\n", " ")
                     narrative_parts.append(f"  - {d.topic}: {stmt}")
             if top_loops:
@@ -222,9 +255,10 @@ class Consolidator:
 
             digest = {
                 "identity": conventions,
-                "active_projects": [str(p) for p in active_projects],
+                "active_projects": [str(p) for p in active_projects[:10]],
                 "open_loops": top_loops,
                 "narrative": narrative,
+                "profile_snapshot": profile_snapshot,
             }
             ambient = Fact(
                 id="ambient-standing-context",

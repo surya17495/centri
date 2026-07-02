@@ -1084,22 +1084,40 @@ class Ambient:
     open_loops: List[str] = field(default_factory=list)
     narrative: str = ""
     source_event_id: Optional[str] = None
+    # Compact profile snapshot from the ambient digest — only durable identity
+    # keys, not ephemeral session state. Populated from the stored digest so the
+    # frame doesn't dump the entire profile on every turn.
+    profile_snapshot: Dict[str, str] = field(default_factory=dict)
 
     def is_empty(self) -> bool:
-        return not (self.user_profile or self.identity or self.active_projects or self.open_loops or self.narrative)
+        return not (self.user_profile or self.identity or self.active_projects or self.open_loops or self.narrative or self.profile_snapshot)
 
     def render(self, budget: int, counter: Optional[TokenCounter] = None,
                cue_terms: Optional[set] = None) -> str:
         counter = counter or default_token_counter()
         lines: List[str] = []
-        if self.user_profile:
-            lines.append("User Profile:")
-            for k, v in self.user_profile.items():
+
+        # Priority 1: Who the user is (compact snapshot, not the full profile)
+        if self.profile_snapshot:
+            lines.append("User:")
+            for k, v in self.profile_snapshot.items():
                 lines.append(f"  {k}: {v}")
-        if self.identity:
-            lines.append("Who/conventions: " + "; ".join(self.identity))
+        elif self.user_profile:
+            # Fallback: show a few key profile entries directly if no snapshot
+            for k in ("active_projects", "active_work", "current_focus", "github_user"):
+                v = self.user_profile.get(k)
+                if v:
+                    lines.append(f"  {k}: {v}")
+            if len(lines) <= 1:
+                lines.insert(0, "User:")
+                lines.append("  (profile available — use memory tool to search)")
+
         if self.active_projects:
-            lines.append("Active: " + "; ".join(self.active_projects))
+            lines.append("Active projects: " + ", ".join(self.active_projects))
+
+        if self.identity:
+            lines.append("Conventions: " + "; ".join(self.identity))
+
         if self.open_loops:
             ranked = list(self.open_loops)
             if cue_terms:
@@ -1108,7 +1126,11 @@ class Ambient:
                     reverse=True,
                 )
             top = ranked[:3]
-            lines.append("Top open loops: " + "; ".join(top))
+            lines.append("Open loops: " + "; ".join(top))
+
+        if self.narrative:
+            lines.append(self.narrative)
+
         block = "\n".join(lines)
         # Trim to budget deterministically: drop whole words from the end until
         # the real token count fits. Word boundaries keep the trim readable while
@@ -1158,6 +1180,7 @@ async def load_ambient(
                 open_loops=list(data.get("open_loops") or []),
                 narrative=str(data.get("narrative") or ""),
                 source_event_id=f.source_event_id,
+                profile_snapshot=dict(data.get("profile_snapshot") or {}),
             )
     return Ambient(user_profile=user_profile)
 
@@ -1186,6 +1209,11 @@ def _suppress_ambient_legacy(ambient: Ambient) -> Ambient:
         open_loops=[s for s in ambient.open_loops if not _text_mentions_legacy(s)],
         narrative=ambient.narrative if not _text_mentions_legacy(ambient.narrative) else "",
         source_event_id=ambient.source_event_id,
+        profile_snapshot={
+            k: v
+            for k, v in ambient.profile_snapshot.items()
+            if not _text_mentions_legacy(k) and not _text_mentions_legacy(v)
+        },
     )
 
 
